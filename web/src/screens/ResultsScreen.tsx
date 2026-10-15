@@ -99,8 +99,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             src={useRender ? `${api.fileUrl(project.id, "render.mp4")}?v=${res.render!.file}${rjob.end?.id ?? ""}` : api.proxyUrl(project.id)} />
           {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} />}
         </div>
-        <div className="row small">
-          <span className="muted">t = {tNow.toFixed(3)} s real</span>
+        <div className="video-bar small">
+          <span className="time-readout">t = <b>{tNow.toFixed(3)}</b> s real</span>
           <span className="grow" />
           {!useRender && <label className="small"><input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} /> tracking overlay</label>}
           {res.render && (
@@ -112,8 +112,10 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         </div>
 
         <section className="panel">
-          <div className="row">
-            <h3 className="grow">Vehicles</h3>
+          <div className="panel-head">
+            <h3>Vehicles</h3>
+            <span className="tag">{rows.length}{rows.length !== res.vehicles.length ? ` of ${res.vehicles.length}` : ""}</span>
+            <span className="grow" />
             <div className="seg-ctl">
               {(["all", "A->B", "B->A"] as const).map((d) => <button key={d} className={dir === d ? "active" : ""} onClick={() => setDir(d)}>{d === "all" ? "All" : d.replace("->", " → ")}</button>)}
             </div>
@@ -124,8 +126,10 @@ export default function ResultsScreen({ project, onChanged }: Props) {
               <thead>
                 <tr>
                   {COLS.map((c) => (
-                    <th key={c.key} title={c.title} className={c.d !== undefined || c.key === "track_id" ? "num" : ""} onClick={() => setSort({ key: c.key, asc: sort.key === c.key ? !sort.asc : true })}>
-                      {c.label}{sort.key === c.key ? (sort.asc ? " ▲" : " ▼") : ""}
+                    <th key={c.key} title={c.title} aria-sort={sort.key === c.key ? (sort.asc ? "ascending" : "descending") : undefined}
+                      className={`${c.d !== undefined || c.key === "track_id" ? "num" : ""}${sort.key === c.key ? " sorted" : ""}`}
+                      onClick={() => setSort({ key: c.key, asc: sort.key === c.key ? !sort.asc : true })}>
+                      {c.label}{sort.key === c.key && <span className="sort">{sort.asc ? "▲" : "▼"}</span>}
                     </th>
                   ))}
                   <th>Status</th>
@@ -142,7 +146,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                           {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
                         </td>;
                       })}
-                      <td>{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
+                      <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
                         {v.valid && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}</td>
                     </tr>
                   );
@@ -165,27 +169,32 @@ export default function ResultsScreen({ project, onChanged }: Props) {
 
       <aside className="res-side">
         <section className="panel">
-          <h3>Speed statistics {dir !== "all" && <span className="muted">({dir.replace("->", " → ")})</span>}</h3>
+          <div className="panel-head">
+            <h3>Speed statistics</h3>
+            {dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
+          </div>
           <div className="tiles">
             <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
             <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
               note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ sample sufficient" : `✕ need ${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2 vehicles"}
               tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />
-            <Tile label="Mean km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `CI ${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
-            <Tile label="σ km/h" value={fmt(stats?.sd, 2)} />
-            <Tile label="p85 km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `CI ${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
-            <Tile label="p95 km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `CI ${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
+            <Tile label="Mean" unit="km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `CI ${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
+            <Tile label="Standard deviation σ" unit="km/h" value={fmt(stats?.sd, 2)} />
+            <Tile label="85th percentile" unit="km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `CI ${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
+            <Tile label="95th percentile" unit="km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `CI ${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
           </div>
-          <p className="muted small">{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
+          <p className="footnote">{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
           <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
         </section>
 
         <section className="panel">
           <h3>Export</h3>
-          <div className="row wrap">
-            <a className="button" href={api.fileUrl(project.id, "results.csv")}>results.csv</a>
-            <a className="button" href={api.fileUrl(project.id, "results.json")}>results.json</a>
-            {res.render && <a className="button" href={api.fileUrl(project.id, "render.mp4")}>render.mp4</a>}
+          <div className="export-grid">
+            <a className="button" href={api.fileUrl(project.id, "results.csv")}><span className="dl-ico">↓</span>results.csv</a>
+            <a className="button" href={api.fileUrl(project.id, "results.json")}><span className="dl-ico">↓</span>results.json</a>
+            {res.render && <a className="button" href={api.fileUrl(project.id, "render.mp4")}><span className="dl-ico">↓</span>render.mp4</a>}
+          </div>
+          <div className="row">
             <button onClick={recompute} title="Re-run speed estimation from stored tracks (after editing lines, calibration or thresholds)">Recompute speeds</button>
           </div>
         </section>
@@ -212,7 +221,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
             <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
           </div>
-          <div className="row">
+          <div className="row end">
             {renderRunning ? <button className="danger" onClick={() => renderJob && api.cancel(renderJob)}>Cancel render</button>
               : <button className="primary" onClick={startRender}>{res.render ? "Re-render" : "Render"}</button>}
           </div>
@@ -229,11 +238,11 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   );
 }
 
-function Tile({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "ok" | "bad" }) {
+function Tile({ label, value, unit, note, tone }: { label: string; value: string; unit?: string; note?: string; tone?: "ok" | "bad" }) {
   return (
     <div className="tile">
       <div className="tile-label">{label}</div>
-      <div className="tile-value">{value}</div>
+      <div className="tile-value">{value}{unit && value !== "–" && <span className="tile-unit">{unit}</span>}</div>
       {note && <div className={`tile-note ${tone ? `${tone}-text` : ""}`}>{note}</div>}
     </div>
   );

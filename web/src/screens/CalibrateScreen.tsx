@@ -4,15 +4,19 @@ import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onNext: () => void }
 
-const TOOLS: { key: Tool; label: string; hint: string }[] = [
-  { key: "move", label: "Move", hint: "Drag handles to adjust; drag empty space to pan." },
-  { key: "polygon", label: "Polygon", hint: "Click 4+ flat ground points (close with Enter, double-click or the first point), then type measured sides and diagonals. Corrects perspective: best for oblique views." },
-  { key: "rect", label: "Rectangle", hint: "Click 4 ground corners of a known rectangle in order around it (e.g. lane width × marking spacing), then type both edge lengths. Gives a homography: required for oblique views." },
-  { key: "segment", label: "Distance", hint: "Click two ground points, then type the measured distance (m)." },
-  { key: "point", label: "Control pt", hint: "Click a ground point with known world coordinates (m). 4+ points give a full homography." },
-  { key: "lineA", label: "Line A", hint: "Click two points across the road for measurement line A." },
-  { key: "lineB", label: "Line B", hint: "Click two points across the road for measurement line B." },
-  { key: "roi", label: "ROI", hint: "Click polygon corners; close with Enter, double-click or by clicking the first point." },
+type ToolGroup = "nav" | "cal" | "lines" | "area";
+const TOOLS: { key: Tool; label: string; hint: string; group: ToolGroup; color?: string; line?: boolean }[] = [
+  { key: "move", group: "nav", label: "Move", hint: "Drag handles to adjust; drag empty space to pan." },
+  { key: "polygon", group: "cal", color: "#b98cff", label: "Polygon", hint: "Click 4+ flat ground points (close with Enter, double-click or the first point), then type measured sides and diagonals. Corrects perspective: best for oblique views." },
+  { key: "rect", group: "cal", color: "#ff8c3a", label: "Rectangle", hint: "Click 4 ground corners of a known rectangle in order around it (e.g. lane width × marking spacing), then type both edge lengths. Gives a homography: required for oblique views." },
+  { key: "segment", group: "cal", color: "#f5c518", line: true, label: "Distance", hint: "Click two ground points, then type the measured distance (m)." },
+  { key: "point", group: "cal", color: "#ff8c3a", label: "Control pt", hint: "Click a ground point with known world coordinates (m). 4+ points give a full homography." },
+  { key: "lineA", group: "lines", color: "#00c8ff", line: true, label: "Line A", hint: "Click two points across the road for measurement line A." },
+  { key: "lineB", group: "lines", color: "#ff3cc8", line: true, label: "Line B", hint: "Click two points across the road for measurement line B." },
+  { key: "roi", group: "area", color: "#4cd97b", label: "ROI", hint: "Click polygon corners; close with Enter, double-click or by clicking the first point." },
+];
+const GROUPS: { key: ToolGroup; label?: string }[] = [
+  { key: "nav" }, { key: "cal", label: "Calibration" }, { key: "lines", label: "Measure" }, { key: "area", label: "Area" },
 ];
 
 export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
@@ -97,11 +101,25 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
   return (
     <div className="calibrate">
       <div className="cal-main">
-        <div className="toolbar">
-          {TOOLS.map((t) => (
-            <button key={t.key} className={tool === t.key ? "tool active" : "tool"} onClick={() => setTool(t.key)}>{t.label}</button>
+        <div className="toolbar" role="toolbar" aria-label="Calibration tools">
+          {GROUPS.map((g) => (
+            <div key={g.key} className="tool-group">
+              {g.label && <span className="tool-group-label">{g.label}</span>}
+              <div className="tool-btns">
+                {TOOLS.filter((t) => t.group === g.key).map((t) => (
+                  <button key={t.key} className={tool === t.key ? "tool active" : "tool"} aria-pressed={tool === t.key}
+                    title={t.hint} onClick={() => setTool(t.key)}>
+                    {t.color && <span className={t.line ? "tool-dot line" : "tool-dot"} style={{ background: t.color }} />}
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
-          <span className="muted small grow hint" title={hint}>{hint} Wheel zooms, right-drag pans, Esc cancels.</span>
+        </div>
+        <div className="hintbar">
+          <span className="hint" title={hint}>{hint}</span>
+          <span className="keys"><kbd>Wheel</kbd> zoom · <kbd>Right-drag</kbd> pan · <kbd>Esc</kbd> cancel</span>
         </div>
         <FrameCanvas src={api.frameUrl(project.id, cal.reference_frame)} cal={cal} tool={tool} onChange={update}
           onSegmentAdded={(i) => { setFocusSeg(i); setTool("move"); }}
@@ -113,17 +131,17 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
             <video ref={setVideo} src={api.proxyUrl(project.id)} muted playsInline preload="auto" className="scrub-video"
               onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
           ) : <div className="scrub-video placeholder">proxy building…</div>}
-          <div className="grow">
-            <input type="range" min={0} max={info.nb_frames - 1} value={scrub} className="wide"
+          <div className="grow scrub-body">
+            <input type="range" min={0} max={info.nb_frames - 1} value={scrub} className="wide" aria-label="Frame"
               onChange={(e) => seek(+e.target.value)} />
             <div className="row small">
-              <button onClick={() => seek(scrub - 1)}>◀ 1</button>
-              <button onClick={() => seek(scrub + 1)}>1 ▶</button>
-              <span>frame</span>
+              <button onClick={() => seek(scrub - 1)} title="Previous frame">◀ 1</button>
+              <button onClick={() => seek(scrub + 1)} title="Next frame">1 ▶</button>
+              <span className="muted">Frame</span>
               <input type="number" className="narrow" value={scrub} onChange={(e) => seek(+e.target.value)} />
-              <span className="muted">/ {info.nb_frames - 1} · t = {fmt(scrub / (project.config.capture_fps || info.container_fps), 3)} s real</span>
+              <span className="muted frame-readout">/ {info.nb_frames - 1} · t = {fmt(scrub / (project.config.capture_fps || info.container_fps), 3)} s real</span>
               <span className="grow" />
-              <span className="muted">reference: frame {cal.reference_frame}</span>
+              <span className="ref-pill" title="Frame the calibration is drawn on">Reference {cal.reference_frame}</span>
               <button className="primary" disabled={scrub === cal.reference_frame} onClick={() => setReference(scrub)}>Use frame {scrub} as reference</button>
             </div>
           </div>
@@ -131,8 +149,9 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
       </div>
 
       <aside className="cal-side">
+        <div className="cal-side-scroll">
         <section className="panel">
-          <div className="row"><h3 className="grow">Calibration</h3><span className={`tag ${saving === "error" ? "bad" : ""}`}>{saving === "saving" ? "saving…" : saving === "saved" ? "saved" : saving === "error" ? "save failed" : ""}</span></div>
+          <div className="row"><h3 className="grow">Calibration</h3><span className={`tag ${saving === "error" ? "bad" : saving === "saved" ? "ok" : ""}`}>{saving === "saving" ? "saving…" : saving === "saved" ? "saved" : saving === "error" ? "save failed" : ""}</span></div>
           {result.error ? <div className="banner warn">{result.error}</div> : (
             <table className="kv">
               <tbody>
@@ -167,8 +186,8 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
                   <span className="grow">{d.i + 1}–{d.j + 1} <span className="muted small">{side ? "side" : "diagonal"}</span></span>
                   <input ref={(el) => (polyInputs.current[k] = el)} type="number" step="any" className="narrow" value={d.meters || ""} placeholder="m"
                     onChange={(e) => setPolyDist(k, parseFloat(e.target.value) || 0)} />
-                  <span className="small">m</span>
-                  {r && <span className={`small ${Math.abs(r.rel_error ?? 0) > 0.01 ? "bad-text" : "muted"}`}>{(r.error_m * 100).toFixed(1)} cm</span>}
+                  <span className="unit">m</span>
+                  {r && <span className={`small resid ${Math.abs(r.rel_error ?? 0) > 0.01 ? "bad-text" : "muted"}`} title="Residual">{(r.error_m * 100).toFixed(1)} cm</span>}
                   <button className="x" onClick={() => setPolyDist(k, null)}>✕</button>
                 </div>
               );
@@ -188,19 +207,20 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
 
         <section className="panel">
           <h3>Distances ({cal.segments.length})</h3>
+          {cal.segments.length === 0 && <p className="empty-note">None yet. Use the Distance tool to add a measured ground distance.</p>}
           {cal.segments.map((s, i) => {
             const r = s.meters > 0 ? segRes(i) : undefined;
             return (
               <div key={i} className="item-row">
                 <span className="swatch" style={{ background: "#f5c518" }} />
                 <span>S{i + 1}</span>
-                <span className="muted small">{fmt(Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]), 1)} px</span>
+                <span className="muted small grow">{fmt(Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]), 1)} px</span>
                 <input ref={(el) => (segInputs.current[i] = el)} type="number" step="any" className="narrow"
                   value={s.meters || ""} placeholder="m"
                   onFocus={() => setFocusSeg(i)}
                   onChange={(e) => { const c = structuredClone(cal); c.segments[i].meters = parseFloat(e.target.value) || 0; update(c); }} />
-                <span className="small">m</span>
-                {r && <span className={`small ${Math.abs(r.rel_error ?? 0) > 0.01 ? "bad-text" : "muted"}`}>{(r.error_m * 100).toFixed(1)} cm</span>}
+                <span className="unit">m</span>
+                {r && <span className={`small resid ${Math.abs(r.rel_error ?? 0) > 0.01 ? "bad-text" : "muted"}`} title="Residual">{(r.error_m * 100).toFixed(1)} cm</span>}
                 <button className="x" onClick={() => { const c = structuredClone(cal); c.segments.splice(i, 1); update(c); setFocusSeg(null); }}>✕</button>
               </div>
             );
@@ -215,29 +235,29 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
                 <span className="swatch" style={{ background: "#ff8c3a" }} />
                 <span className="grow">Edge 1→2</span>
                 <input ref={rectW} type="number" step="any" className="narrow" value={rd.w || ""} placeholder="m"
-                  onChange={(e) => setRect(parseFloat(e.target.value) || 0, rd.l)} /><span className="small">m</span>
+                  onChange={(e) => setRect(parseFloat(e.target.value) || 0, rd.l)} /><span className="unit">m</span>
               </div>
               <div className="item-row">
                 <span className="swatch" style={{ background: "#ff8c3a" }} />
                 <span className="grow">Edge 2→3</span>
                 <input type="number" step="any" className="narrow" value={rd.l || ""} placeholder="m"
-                  onChange={(e) => setRect(rd.w, parseFloat(e.target.value) || 0)} /><span className="small">m</span>
+                  onChange={(e) => setRect(rd.w, parseFloat(e.target.value) || 0)} /><span className="unit">m</span>
                 <button className="x" onClick={() => update({ ...cal, points: [] })}>✕</button>
               </div>
               <p className="muted small">Distance segments become independent checks of the homography: add one or two along the road.</p>
             </>
           )}
-          {!rd && cal.points.length === 0 && <p className="muted small">Optional. World coordinates in metres (e.g. from an orthophoto). ≥4 points → homography.</p>}
+          {!rd && cal.points.length === 0 && <p className="empty-note">Optional. World coordinates in metres (e.g. from an orthophoto). ≥4 points → homography.</p>}
           {!rd && cal.points.map((p, i) => {
             const r = result.residuals?.find((x) => x.kind === "point" && x.index === i);
             return (
               <div key={i} className="item-row">
-                <span>P{i + 1}</span>
+                <span className="grow">P{i + 1}</span>
                 {[0, 1].map((k) => (
                   <input key={k} type="number" step="any" className="narrow" value={p.world[k]}
                     onChange={(e) => { const c = structuredClone(cal); c.points[i].world[k] = parseFloat(e.target.value) || 0; update(c); }} />
                 ))}
-                {r && <span className="muted small">{(r.error_m * 100).toFixed(1)} cm</span>}
+                {r && <span className="muted small resid" title="Residual">{(r.error_m * 100).toFixed(1)} cm</span>}
                 <button className="x" onClick={() => { const c = structuredClone(cal); c.points.splice(i, 1); update(c); }}>✕</button>
               </div>
             );
@@ -250,7 +270,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
             <div key={k} className="item-row">
               <span className="swatch" style={{ background: k === "line_a" ? "#00c8ff" : "#ff3cc8" }} />
               <span className="grow">Line {k === "line_a" ? "A" : "B"}</span>
-              <span className="muted small">{cal[k] ? "set" : "not set"}</span>
+              <span className={`small ${cal[k] ? "ok-text" : "muted"}`}>{cal[k] ? "✓ set" : "not set"}</span>
               {cal[k] && <button className="x" onClick={() => update({ ...cal, [k]: null })}>✕</button>}
             </div>
           ))}
@@ -262,8 +282,11 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           </div>
         </section>
 
-        <button className="primary wide" disabled={!ready} onClick={onNext}>Continue to processing →</button>
-        {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (rectangle, distance or control points) and both lines."}</p>}
+        </div>
+        <div className="cal-foot">
+          <button className="primary wide lg" disabled={!ready} onClick={onNext}>Continue to processing →</button>
+          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (rectangle, distance or control points) and both lines."}</p>}
+        </div>
       </aside>
     </div>
   );

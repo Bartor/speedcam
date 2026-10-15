@@ -8,11 +8,32 @@ import JobsIndicator from "./components/JobsIndicator";
 
 export type Screen = "import" | "calibrate" | "process" | "results";
 const SCREENS: { key: Screen; label: string }[] = [
-  { key: "import", label: "1 · Import" },
-  { key: "calibrate", label: "2 · Calibrate" },
-  { key: "process", label: "3 · Process" },
-  { key: "results", label: "4 · Results" },
+  { key: "import", label: "Import" },
+  { key: "calibrate", label: "Calibrate" },
+  { key: "process", label: "Process" },
+  { key: "results", label: "Results" },
 ];
+
+/** Which steps already have their output, so the nav reads as a progression. */
+function stepDone(p: Project | null, s: Screen): boolean {
+  if (!p) return false;
+  const c = p.config.calibration;
+  switch (s) {
+    case "import": return true;
+    case "calibrate": return !!(c.line_a && c.line_b && !p.calibration_result.error && p.calibration_result.fit_ok !== false);
+    case "process": return !!p.status.results_json;
+    case "results": return !!p.status.render_mp4;
+  }
+}
+
+const BrandMark = () => (
+  <span className="brand-mark" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M3 2.5v9M11 2.5v9" strokeOpacity=".55" />
+      <path d="M1.5 7h8.5M8 4.8 10.3 7 8 9.2" />
+    </svg>
+  </span>
+);
 
 function parseHash(): { id: string | null; screen: Screen } {
   const m = window.location.hash.match(/^#\/p\/([a-z0-9-]+)(?:\/(\w+))?/);
@@ -53,14 +74,23 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand" onClick={() => (window.location.hash = "#/")}>speedcam</div>
-        <nav>
-          {SCREENS.map((s) => (
-            <button key={s.key} className={route.screen === s.key ? "tab active" : "tab"}
-              disabled={!p && s.key !== "import"} onClick={() => go(s.key)}>{s.label}</button>
-          ))}
+        <button className="brand" onClick={() => (window.location.hash = "#/")} title="Project library"><BrandMark />speedcam</button>
+        <nav aria-label="Workflow steps">
+          <ol className="steps">
+            {SCREENS.map((s, i) => {
+              const active = route.screen === s.key, done = stepDone(p, s.key);
+              return (
+                <li key={s.key} className={done ? "done" : ""}>
+                  <button className={`step${active ? " active" : ""}${done ? " done" : ""}`} aria-current={active ? "step" : undefined}
+                    disabled={!p && s.key !== "import"} onClick={() => go(s.key)}>
+                    <span className="step-num">{done && !active ? "✓" : i + 1}</span>{s.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
         </nav>
-        <div className="project-name">{p ? p.name : ""}</div>
+        <div className="project-name" title={p?.name}>{p ? p.name : ""}</div>
         <JobsIndicator />
       </header>
       {error && <div className="banner error">{error}</div>}
