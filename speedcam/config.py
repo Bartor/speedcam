@@ -1,0 +1,162 @@
+"""Project configuration schema.
+
+The same schema is used for `project.json` (web app) and the YAML config the CLI
+accepts. All pixel coordinates are in *reference-frame* pixels of the original
+video (full resolution).
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Literal, Optional
+
+import yaml
+from pydantic import BaseModel, Field
+
+Pt = tuple[float, float]
+
+
+class Segment(BaseModel):
+    """Two ground points with a measured distance between them."""
+
+    a: Pt
+    b: Pt
+    meters: float
+
+
+class ControlPoint(BaseModel):
+    """A ground point with known world coordinates (metres, any local frame)."""
+
+    px: Pt
+    world: Pt
+
+
+class PolygonDistance(BaseModel):
+    """Measured ground distance between polygon vertices i and j (a side or a diagonal)."""
+
+    i: int
+    j: int
+    meters: float
+
+
+class Polygon(BaseModel):
+    """Flat ground polygon with measured sides/diagonals. Its shape is solved from the distances
+    (needs >= 2N-3 of them) and gives the image -> ground homography (perspective correction)."""
+
+    points: list[Pt] = Field(default_factory=list)
+    distances: list[PolygonDistance] = Field(default_factory=list)
+
+
+class Calibration(BaseModel):
+    reference_frame: int = 0
+    segments: list[Segment] = Field(default_factory=list)
+    points: list[ControlPoint] = Field(default_factory=list)
+    polygon: Optional[Polygon] = None
+    line_a: Optional[tuple[Pt, Pt]] = None
+    line_b: Optional[tuple[Pt, Pt]] = None
+    roi: Optional[list[Pt]] = None
+
+
+class DetectionSettings(BaseModel):
+    type: Literal["yolo", "blob"] = "yolo"
+    # COCO model handles oblique and nadir views; yolo11*-obb.pt (DOTA) only suits true top-down footage.
+    model: str = "yolo11x.pt"
+    conf: float = 0.25
+    iou: float = 0.5
+    imgsz: int = 1280
+    # 0 = run on the whole frame (resized to imgsz); otherwise tile size in source px.
+    tile: int = 0
+    tile_overlap: float = 0.2
+    device: Optional[str] = None
+    half: bool = True
+    classes: list[str] = Field(default_factory=lambda: ["car", "truck", "bus", "motorcycle"])
+    # "blob" detector (synthetic tests): minimum saturation and component area.
+    blob_min_saturation: int = 120
+    blob_min_area: int = 200
+
+
+class TrackingSettings(BaseModel):
+    activation_threshold: float = 0.25
+    lost_buffer_s: float = 1.0
+    match_threshold: float = 0.8
+    min_consecutive_frames: int = 3
+
+
+class StabilizationSettings(BaseModel):
+    enabled: bool = True
+    model: Literal["similarity", "affine", "homography"] = "similarity"
+    # klt: track reference corners with pyramidal Lucas-Kanade (fast, sub-pixel);
+    # orb/sift: descriptor matching. KLT falls back to ORB when it loses lock.
+    features: Literal["klt", "orb", "sift"] = "klt"
+    max_features: int = 3000
+    work_width: int = 1600
+    min_inliers: int = 40
+    ransac_thresh: float = 1.5
+    vehicle_mask_pad: float = 0.15
+
+
+class SpeedSettings(BaseModel):
+    smooth_window_s: float = 0.25
+    smooth_poly: int = 2
+    arc_dt_s: float = 0.05
+    max_accel: float = 8.0
+    # max deviation from a constant-acceleration fit; box-centre wobble on real footage is
+    # ~0.2-0.4 m, an ID switch to another car jumps by a car length
+    max_residual_m: float = 0.5
+    max_disagreement: float = 0.02
+    disagreement_invalidates: bool = False
+    max_gap_s: float = 0.3
+    min_points: int = 10
+    line_extend: float = 0.1
+
+
+class RenderSettings(BaseModel):
+    mode: Literal["stabilized", "original"] = "stabilized"
+    output_fps: Optional[float] = None  # None = native (capture_fps)
+    playback_speed: float = 1.0  # 1.0 = real time, 0.25 = 4x slow motion
+    scale: float = 0.5
+    lut: Optional[str] = None  # .cube file applied before drawing
+    encoder: Literal["auto", "nvenc", "videotoolbox", "x264"] = "auto"
+    quality: int = 20
+    trail_s: float = 1.0
+    speed_limit_kmh: float = 50.0
+
+
+class StatsSettings(BaseModel):
+    permitted_error_kmh: float = 2.0
+    confidence: float = 0.95
+
+
+class ProjectConfig(BaseModel):
+    source: str
+    capture_fps: Optional[float] = None
+    real_duration_s: Optional[float] = None
+    start_frame: int = 0
+    end_frame: Optional[int] = None
+    calibration: Calibration = Field(default_factory=Calibration)
+    detection: DetectionSettings = Field(default_factory=DetectionSettings)
+    tracking: TrackingSettings = Field(default_factory=TrackingSettings)
+    stabilization: StabilizationSettings = Field(default_factory=StabilizationSettings)
+    speed: SpeedSettings = Field(default_factory=SpeedSettings)
+    render: RenderSettings = Field(default_factory=RenderSettings)
+    stats: StatsSettings = Field(default_factory=StatsSettings)
+
+
+def load_config(path: str | Path) -> ProjectConfig:
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+    cfg = ProjectConfig.model_validate(data)
+    src = Path(cfg.source)
+    if not src.is_absolute():
+        cfg.source = str((path.parent / src).resolve())
+    return cfg
+
+
+def save_config(cfg: ProjectConfig, path: str | Path) -> None:
+    path = Path(path)
+    data = cfg.model_dump(mode="json")
+    if path.suffix.lower() == ".json":
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    else:
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")

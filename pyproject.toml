@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speedcam"
+version = "0.1.0"
+description = "Vehicle speed measurement from nadir drone footage"
+requires-python = ">=3.11"
+dependencies = [
+    "ultralytics>=8.3",
+    "supervision>=0.25,<0.31",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "av>=12",
+    "pyyaml>=6",
+    "typer>=0.12",
+    "pydantic>=2.6",
+    "pandas>=2.1",
+    "pyarrow>=15",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+speedcam = "speedcam.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["speedcam*"]
+
+[tool.setuptools.package-data]
+"speedcam.server" = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: end-to-end tests that encode video"]

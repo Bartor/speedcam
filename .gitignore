@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+projects/
+web/node_modules/
+web/dist/
+speedcam/server/static/
+*.pt
+.pytest_cache/
+*.tsbuildinfo
