@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, fmt, LibraryProject, timeAgo } from "../api";
+import { ActiveJob, pct, useActiveJobs } from "./JobsIndicator";
 
 /** All projects in the data folder, newest-opened first; click to resume where you left off. */
 export default function ProjectLibrary() {
   const [items, setItems] = useState<LibraryProject[] | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const { jobs } = useActiveJobs();
+  const activeCount = jobs.length;
+  // refresh rows (stats, status) whenever a job finishes
+  useEffect(() => { load(); }, [activeCount]);
 
   const load = () => api.projects().then(setItems).catch((e) => setErr(String(e)));
   useEffect(() => { load(); }, []);
@@ -30,13 +35,13 @@ export default function ProjectLibrary() {
       {items === null && <p className="muted">Loading…</p>}
       {items?.length === 0 && <p className="muted">No projects yet. Pick a video on the left to create one.</p>}
       <div className="lib-grid">
-        {shown.map((p) => <Card key={p.id} p={p} onDelete={() => remove(p)} />)}
+        {shown.map((p) => <Card key={p.id} p={p} job={jobs.find((j) => j.project_id === p.id)} onDelete={() => remove(p)} />)}
       </div>
     </section>
   );
 }
 
-function Card({ p, onDelete }: { p: LibraryProject; onDelete: () => void }) {
+function Card({ p, job, onDelete }: { p: LibraryProject; job?: ActiveJob; onDelete: () => void }) {
   const [thumbOk, setThumbOk] = useState(true);
   const screen = p.last_screen ?? (p.has_results ? "results" : p.calibrated ? "process" : "calibrate");
   const open = () => (window.location.hash = `#/p/${p.id}/${screen}`);
@@ -46,7 +51,13 @@ function Card({ p, onDelete }: { p: LibraryProject; onDelete: () => void }) {
       <div className="lib-thumb">
         {thumbOk && p.source_exists ? <img src={api.thumbUrl(p.id)} alt="" loading="lazy" onError={() => setThumbOk(false)} />
           : <span className="muted small">{p.source_exists ? "no preview" : "video missing"}</span>}
-        {p.has_results ? (
+        {job && (
+          <div className="lib-job" title={job.progress.stage ?? job.status}>
+            <span className="small">{job.status === "running" ? `${job.kind} ${pct(job).toFixed(0)}%` : `${job.kind} queued`}</span>
+            <span className="jobs-ind-bar wide"><span style={{ width: `${pct(job)}%` }} /></span>
+          </div>
+        )}
+        {p.has_results && !job ? (
           <span className="lib-badge">{p.n_valid}/{p.n_vehicles} valid</span>
         ) : null}
       </div>

@@ -67,8 +67,13 @@ class DetectionSettings(BaseModel):
     # 0 = run on the whole frame (resized to imgsz); otherwise tile size in source px.
     tile: int = 0
     tile_overlap: float = 0.2
+    # frames detected per GPU call. Each frame is still detected on its own (no context between
+    # frames); batching only keeps the GPU busy. Tracking always runs frame by frame, in order.
+    batch: int = 8
     device: Optional[str] = None
-    half: bool = True
+    # FP16 is ~45% faster but not repeatable run to run, and moves speeds by up to ~0.2 km/h
+    # (box coordinates are quantized to ~1.5-3 px at 4K). FP32 gives identical results on reruns.
+    half: bool = False
     classes: list[str] = Field(default_factory=lambda: ["car", "truck", "bus", "motorcycle"])
     # "blob" detector (synthetic tests): minimum saturation and component area.
     blob_min_saturation: int = 120

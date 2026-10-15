@@ -101,14 +101,28 @@ class YoloDetector:
         # newer Ultralytics replaced `half` with `quantize`
         self.precision = {"quantize": 16 if half else 32} if _has_quantize() else {"half": half}
 
+    MAX_IMAGES_PER_CALL = 32  # crops per GPU call (frames x tiles)
+
     def __call__(self, frame: np.ndarray) -> Detections:
-        h, w = frame.shape[:2]
+        return self.detect_batch([frame])[0]
+
+    def detect_batch(self, frames: list[np.ndarray]) -> list[Detections]:
+        """Detect each frame independently; several frames (and their tiles) share one GPU call."""
+        if not frames:
+            return []
+        h, w = frames[0].shape[:2]
         tiles = make_tiles(w, h, self.s.tile, self.s.tile_overlap) if self.s.tile else [(0, 0, w, h)]
-        crops = [frame[y0:y1, x0:x1] for x0, y0, x1, y1 in tiles]
-        results = self.model.predict(
-            crops, imgsz=self.s.imgsz, conf=self.s.conf, iou=self.s.iou, device=self.device,
-            classes=list(self.class_map), verbose=False, **self.precision,
-        )
+        crops = [f[y0:y1, x0:x1] for f in frames for x0, y0, x1, y1 in tiles]
+        results = []
+        for k in range(0, len(crops), self.MAX_IMAGES_PER_CALL):
+            results += self.model.predict(
+                crops[k:k + self.MAX_IMAGES_PER_CALL], imgsz=self.s.imgsz, conf=self.s.conf, iou=self.s.iou,
+                device=self.device, classes=list(self.class_map), verbose=False, **self.precision,
+            )
+        nt = len(tiles)
+        return [self._collect(tiles, results[j * nt:(j + 1) * nt]) for j in range(len(frames))]
+
+    def _collect(self, tiles, results) -> Detections:
         corners, conf, cls = [], [], []
         for (x0, y0, _, _), r in zip(tiles, results):
             if self.obb:
@@ -153,6 +167,9 @@ class BlobDetector:
             return Detections.empty()
         n = len(corners)
         return Detections(np.array(corners, np.float64), np.full(n, 0.99), np.zeros(n, int))
+
+    def detect_batch(self, frames: list[np.ndarray]) -> list[Detections]:
+        return [self(f) for f in frames]
 
 
 def make_detector(s: DetectionSettings):

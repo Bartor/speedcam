@@ -98,6 +98,8 @@ def synth(out: Path = typer.Option(Path("synthetic.mp4")), speed: float = 50.0,
 @app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000,
           data_dir: Optional[Path] = typer.Option(None, help="Where project folders live (default ~/speedcam-projects)"),
+          jobs: int = typer.Option(2, "--jobs", help="Jobs that run at the same time"),
+          gpu_jobs: int = typer.Option(1, "--gpu-jobs", help="Of those, detection jobs (each ~6-9 GB of VRAM)"),
           open_browser: bool = typer.Option(True, "--open/--no-open")):
     """Start the local web app."""
     import os
@@ -107,6 +109,8 @@ def serve(host: str = "127.0.0.1", port: int = 8000,
 
     if data_dir:
         os.environ["SPEEDCAM_DATA_DIR"] = str(data_dir.resolve())
+    os.environ["SPEEDCAM_JOB_SLOTS"] = str(max(1, jobs))
+    os.environ["SPEEDCAM_GPU_JOBS"] = str(max(1, gpu_jobs))
     if open_browser:
         import threading
 

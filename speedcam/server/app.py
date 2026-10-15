@@ -29,7 +29,7 @@ class CreateProject(BaseModel):
     name: Optional[str] = None
 
 
-def create_app(data_dir: Path) -> FastAPI:
+def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
     store = ProjectStore(data_dir)
     store.db.mark_interrupted()
 
@@ -38,7 +38,9 @@ def create_app(data_dir: Path) -> FastAPI:
         if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render"):
             store.refresh(job.project_id)
 
-    jobs = JobManager(on_change=on_job_change)
+    slots = job_slots or int(os.environ.get("SPEEDCAM_JOB_SLOTS", "2"))
+    gpu_slots = int(os.environ.get("SPEEDCAM_GPU_JOBS", "1"))
+    jobs = JobManager(on_change=on_job_change, slots=slots, gpu_slots=gpu_slots)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -298,6 +300,13 @@ def create_app(data_dir: Path) -> FastAPI:
         if not job:
             raise HTTPException(404, "job not found")
         return job
+
+    @app.get("/api/jobs/active")
+    def active_jobs():
+        """Running and queued jobs across all projects, with progress (polled by the UI)."""
+        names = {r["id"]: r["name"] for r in store.list()}
+        return {"slots": jobs.slots, "gpu_slots": jobs.gpu_slots,
+                "jobs": [j.brief() | {"project_name": names.get(j.project_id, j.project_id)} for j in jobs.active()]}
 
     @app.get("/api/jobs")
     def list_jobs():

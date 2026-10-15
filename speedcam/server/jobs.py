@@ -1,5 +1,6 @@
-"""Single-slot job runner: each job runs in a spawned worker process (GPU-bound),
-progress flows back through a multiprocessing queue and is exposed over SSE."""
+"""Job runner with N parallel slots. Each job runs in its own spawned worker process (GPU-bound);
+progress flows back through a multiprocessing queue and is exposed over SSE. At most one job per
+project runs at a time, so jobs never read files another job of the same project is writing."""
 from __future__ import annotations
 
 import base64
@@ -112,19 +113,32 @@ class Job:
                                               "finished", "progress", "result", "error")} | \
                {"log": self.log[-200:]}
 
+    def brief(self) -> dict:
+        """Status + progress only (for the global jobs indicator, polled often)."""
+        return {k: getattr(self, k) for k in ("id", "project_id", "kind", "status", "created", "started", "progress")}
+
 
 class JobManager:
-    def __init__(self, on_change: Optional[Callable[[Job], None]] = None):
-        """`on_change(job)` is called on every status transition (queued, running, finished)."""
+    # jobs that load the detection model on the GPU (a batched analysis already saturates it)
+    GPU_KINDS = {"analyze", "preview"}
+
+    def __init__(self, on_change: Optional[Callable[[Job], None]] = None, slots: int = 2, gpu_slots: int = 1):
+        """`on_change(job)` is called on every status transition (queued, running, finished).
+        `slots`: jobs running at once. `gpu_slots`: of those, how many may run detection (each
+        needs ~6-9 GB of VRAM with batching); proxy and render jobs use CPU + the video encoder."""
         self.on_change = on_change
+        self.slots = max(1, int(slots))
+        self.gpu_slots = max(1, int(gpu_slots))
         self.ctx = mp.get_context("spawn")
         self.jobs: dict[str, Job] = {}
         self.pending: deque[Job] = deque()
         self.cv = threading.Condition()
-        self.current: Optional[Job] = None
-        self._proc = None
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        self.running: dict[str, Job] = {}
+        self._procs: dict[str, Any] = {}
+        self._threads = [threading.Thread(target=self._loop, daemon=True, name=f"job-slot-{k}")
+                         for k in range(self.slots)]
+        for t in self._threads:
+            t.start()
 
     def _notify(self, job: Job) -> None:
         if self.on_change:
@@ -143,24 +157,31 @@ class JobManager:
         self._notify(job)
         return job
 
+    def active(self) -> list[Job]:
+        with self.cv:
+            return list(self.running.values()) + list(self.pending)
+
     def active_for(self, project_id: str) -> list[Job]:
         return [j for j in self.jobs.values() if j.project_id == project_id and j.status in ("queued", "running")]
 
     def shutdown(self, timeout: float = 3.0) -> None:
-        """Server is exiting: drop queued jobs and stop the running worker (it holds the GPU)."""
+        """Server is exiting: drop queued jobs and stop running workers (they hold the GPU)."""
         with self.cv:
             while self.pending:
                 job = self.pending.popleft()
                 job.status, job.finished = "cancelled", time.time()
                 self._notify(job)
-        job, proc = self.current, self._proc
-        if job is None or proc is None or not proc.is_alive():
-            return
-        job.cancel_event.set()
-        proc.join(timeout)
-        if proc.is_alive():
-            proc.kill()
-            proc.join(2)
+            running = [(j, self._procs.get(j.id)) for j in self.running.values()]
+        for job, _ in running:
+            job.cancel_event.set()
+        deadline = time.time() + timeout
+        for _, proc in running:
+            if proc is not None:
+                proc.join(max(0.0, deadline - time.time()))
+        for _, proc in running:
+            if proc is not None and proc.is_alive():
+                proc.kill()
+                proc.join(2)
 
     def cancel(self, job_id: str) -> Job:
         job = self.jobs[job_id]
@@ -174,24 +195,38 @@ class JobManager:
                 job.cancel_event.set()
         return job
 
+    def _next(self) -> Optional[Job]:
+        """Oldest queued job whose project has nothing running and, for detection jobs, whose GPU
+        slot is free (call with self.cv held)."""
+        busy = {j.project_id for j in self.running.values()}
+        gpu_free = sum(j.kind in self.GPU_KINDS for j in self.running.values()) < self.gpu_slots
+        return next((j for j in self.pending
+                     if j.project_id not in busy and (gpu_free or j.kind not in self.GPU_KINDS)), None)
+
     def _loop(self) -> None:
         while True:
             with self.cv:
-                while not self.pending:
+                while (job := self._next()) is None:
                     self.cv.wait()
-                job = self.pending.popleft()
+                self.pending.remove(job)
                 job.status, job.started = "running", time.time()
                 job.seq += 1
-                self.current = job
+                self.running[job.id] = job
             self._notify(job)
-            self._run(job)
-            self.current = None
+            try:
+                self._run(job)
+            finally:
+                with self.cv:
+                    self.running.pop(job.id, None)
+                    self._procs.pop(job.id, None)
+                    self.cv.notify_all()
 
     def _run(self, job: Job) -> None:
         q = self.ctx.Queue()
         proc = self.ctx.Process(target=run_job, args=(job.kind, job.project_dir, q, job.cancel_event, job.params), daemon=True)
         proc.start()
-        self._proc = proc
+        with self.cv:
+            self._procs[job.id] = proc
         cancel_deadline = None
         final = None
         while True:

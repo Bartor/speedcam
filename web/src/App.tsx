@@ -4,6 +4,7 @@ import ImportScreen from "./screens/ImportScreen";
 import CalibrateScreen from "./screens/CalibrateScreen";
 import ProcessScreen from "./screens/ProcessScreen";
 import ResultsScreen from "./screens/ResultsScreen";
+import JobsIndicator from "./components/JobsIndicator";
 
 export type Screen = "import" | "calibrate" | "process" | "results";
 const SCREENS: { key: Screen; label: string }[] = [
@@ -60,6 +61,7 @@ export default function App() {
           ))}
         </nav>
         <div className="project-name">{p ? p.name : ""}</div>
+        <JobsIndicator />
       </header>
       {error && <div className="banner error">{error}</div>}
       <main>

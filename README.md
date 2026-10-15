@@ -5,10 +5,29 @@ per-vehicle CSV/JSON and an annotated MP4. It's a local app: a Python analysis
 package with a CLI, plus a FastAPI server and a browser UI that acts as a client of
 that package.
 
-## Setup
+## Quick start
 
-Python 3.11+ and the ffmpeg/ffprobe CLI on `PATH`. For GPU detection, install a CUDA
-build of PyTorch first.
+Needs Python 3.11+, the ffmpeg/ffprobe CLI on `PATH`, and Node.js 18+ (only to build
+the UI). Then, from this folder:
+
+```bash
+speedcam            # Windows: speedcam.cmd (or double-click it); macOS/Linux: ./speedcam.sh
+```
+
+The first run takes a few minutes. It creates `.venv`, installs dependencies (with
+CUDA PyTorch when an NVIDIA GPU is present), builds the web UI, then starts the app
+and opens the browser. After that it starts straight away, and redoes a setup step
+only when it's needed: `pyproject.toml` changed, or the UI sources are newer than
+the build. No need to activate the venv.
+
+```bash
+speedcam --shortcut          # desktop shortcut (Windows)
+speedcam serve --jobs 3      # any CLI command works through the launcher
+speedcam analyze p.yaml --out out/
+speedcam --setup-only        # install/update without starting
+```
+
+Manual setup, if you prefer:
 
 ```bash
 python -m venv .venv

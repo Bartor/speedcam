@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -95,6 +99,60 @@ def _preview_jpeg(frame: np.ndarray, corners: np.ndarray, ids: np.ndarray, trail
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])[1].tobytes()
 
 
+class _Prefetch:
+    """Run a frame iterator on a background thread, up to `maxsize` frames ahead."""
+
+    _END = object()
+
+    def __init__(self, it, maxsize: int):
+        self._q: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(it,), daemon=True, name="decode")
+        self._thread.start()
+
+    def _put(self, item) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._q.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self, it) -> None:
+        try:
+            for item in it:
+                if not self._put(item):
+                    return
+            self._put(self._END)
+        except BaseException as e:  # noqa: BLE001 - re-raised in the consumer
+            self._put(e)
+
+    def __iter__(self):
+        while True:
+            item = self._q.get()
+            if item is self._END:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
+def _chunks(it, n: int):
+    buf = []
+    for x in it:
+        buf.append(x)
+        if len(buf) == n:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
+
+
 def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter] = None,
             preview_every_s: float = 0.5) -> dict:
     reporter = reporter or Reporter()
@@ -138,9 +196,6 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     rows: list[np.ndarray] = []
     T_frames, T_all, stab_rows = [], [], []
     t_start = time.monotonic()
-    last_preview = 0.0
-    done = 0
-    n_dets = 0
     # how far the camera moves relative to the reference frame (frame centre, px):
     # tells whether stabilization can be skipped for this footage
     centre = np.array([[info.width / 2, info.height / 2]])
@@ -148,9 +203,11 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     trails: dict[int, list] = {}
     trail_len = int(round(fps))  # 1 s of history
     seen_tracks: set[int] = set()
-    for i, frame in iter_frames(cfg.source, start, end, pts_check):
-        dets = detector(frame)
-        n_dets += len(dets)
+    state = {"done": 0, "n_dets": 0, "last_preview": 0.0}
+
+    def per_frame(i: int, frame: np.ndarray, dets) -> None:
+        """Stabilize, track and record one frame. Called strictly in frame order (tracking needs it)."""
+        state["n_dets"] += len(dets)
         if stab:
             reg = stab.register(frame, dets.xyxy)
             T = reg.T
@@ -158,10 +215,9 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
             if not reg.ok and (stab.n_fallback <= 20 or stab.n_fallback % 100 == 0):
                 reporter.log(f"frame {i}: registration failed ({reg.inliers} inliers), "
                              f"reusing previous transform ({stab.n_fallback} so far)", "warning")
+            drift.append(float(np.linalg.norm(transform_points(T, centre) - centre)))
         else:
             T = np.eye(3)
-        if stab:
-            drift.append(float(np.linalg.norm(transform_points(T, centre) - centre)))
         T_frames.append(i)
         T_all.append(T)
 
@@ -197,20 +253,46 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
                 np.full(n, i), ids, dets.cls, dets.conf, cf, centers_ref, world, corners_ref.reshape(n, 8),
             ]))
 
-        done += 1
+        state["done"] += 1
+        done = state["done"]
         now = time.monotonic()
         if done % 5 == 0 or done == total:
             reporter.progress("analyzing", done, total, fps=done / max(now - t_start, 1e-6),
                               tracks=len(seen_tracks))
-        if now - last_preview > preview_every_s:
-            last_preview = now
+        if now - state["last_preview"] > preview_every_s:
+            state["last_preview"] = now
             T_inv = np.linalg.inv(T)
             lines = [(n, transform_points(T_inv, np.array(l, float)), col) for n, l, col in
                      (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))]
             text = f"frame {i}  t {i / fps:.2f} s  {len(dets)} det  {len(live)} tracked  {len(seen_tracks)} tracks so far"
             reporter.preview(_preview_jpeg(frame, dets.corners, ids, trails, lines, text))
-        if reporter.cancelled():
-            raise InterruptedError("cancelled")
+
+    def track_chunk(chunk, dets_list) -> None:
+        for (i, f), d in zip(chunk, dets_list):
+            per_frame(i, f, d)
+
+    # Three-stage pipeline so the GPU isn't idle while the CPU decodes and tracks:
+    #   decoder thread -> batch of frames -> detection (GPU; each frame detected on its own)
+    #   -> per_frame() on a single worker thread, strictly in frame order.
+    batch = max(1, cfg.detection.batch)
+    frames = _Prefetch(iter_frames(cfg.source, start, end, pts_check), maxsize=2 * batch)
+    pending: deque[Future] = deque()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="track") as post:
+        try:
+            for chunk in _chunks(frames, batch):
+                dets_list = detector.detect_batch([f for _, f in chunk])
+                pending.append(post.submit(track_chunk, chunk, dets_list))
+                while len(pending) > 1:  # bound memory: one batch tracking, at most one waiting
+                    pending.popleft().result()
+                if reporter.cancelled():
+                    raise InterruptedError("cancelled")
+            while pending:
+                pending.popleft().result()
+        finally:
+            frames.close()
+            for f in pending:
+                f.cancel()
+    done, n_dets = state["done"], state["n_dets"]
 
     cols = ["frame", "track_id", "cls", "conf", "cx", "cy", "rx", "ry", "x_m", "y_m"] + \
            [f"c{k}{a}" for k in range(4) for a in "xy"]

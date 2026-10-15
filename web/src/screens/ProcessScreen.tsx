@@ -11,6 +11,8 @@ const FIELDS: Field[] = [
   { section: "detection", key: "model", label: "YOLO model", type: "text", hint: "yolo11x.pt (COCO, any view angle) or yolo11x-obb.pt (DOTA, true top-down only)" },
   { section: "detection", key: "conf", label: "Confidence", type: "num" },
   { section: "detection", key: "imgsz", label: "Inference size", type: "num" },
+  { section: "detection", key: "half", label: "Fast mode (FP16)", type: "bool", hint: "~45% faster, but results aren't identical on reruns and speeds can shift by ~0.2 km/h. Off = FP32, repeatable." },
+  { section: "detection", key: "batch", label: "Frames per GPU batch", type: "num", hint: "Detection only; frames are still detected independently and tracked in order. Lower it if the GPU runs out of memory." },
   { section: "detection", key: "tile", label: "Tile size (0 = off)", type: "num", hint: "Tile 4K frames when vehicles are small, e.g. 1024" },
   { section: "stabilization", key: "model", label: "Motion model", type: "select", options: ["similarity", "affine", "homography"] },
   { section: "stabilization", key: "features", label: "Registration", type: "select", options: ["klt", "orb", "sift"] },

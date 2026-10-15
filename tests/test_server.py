@@ -131,3 +131,48 @@ def test_index_rebuilds_from_folders(tmp_path):
         f.unlink()
     store2 = ProjectStore(tmp_path / "projects")
     assert [r["id"] for r in store2.list()] == [pid]
+
+
+@pytest.mark.slow
+def test_parallel_slots_one_job_per_project(tmp_path):
+    """Two projects run at the same time; two jobs of one project never overlap."""
+    a = make_synthetic(tmp_path / "a.mp4", speed_kmh=50.0, size=(640, 360), m_per_px=0.1)
+    b = make_synthetic(tmp_path / "b.mp4", speed_kmh=50.0, size=(640, 360), m_per_px=0.1, seed=1)
+    app = create_app(tmp_path / "projects", job_slots=2)
+    client = TestClient(app)
+    pa = client.post("/api/projects", json={"source": a.source}).json()
+    pb = client.post("/api/projects", json={"source": b.source}).json()
+    second_a = client.post(f"/api/projects/{pa['id']}/proxy").json()  # same project as pa's proxy job
+
+    seen_parallel, seen_same_project = False, False
+    t0 = time.time()
+    while time.time() - t0 < 180:
+        active = client.get("/api/jobs/active").json()
+        assert active["slots"] == 2
+        running = [j for j in active["jobs"] if j["status"] == "running"]
+        projects = [j["project_id"] for j in running]
+        seen_parallel |= len(set(projects)) == 2
+        seen_same_project |= len(projects) != len(set(projects))
+        if not active["jobs"]:
+            break
+        time.sleep(0.1)
+    assert seen_parallel, "jobs of different projects should run at the same time"
+    assert not seen_same_project, "two jobs of one project must not run at once"
+    for jid in (pa["proxy_job"], pb["proxy_job"], second_a["id"]):
+        assert client.get(f"/api/jobs/{jid}").json()["status"] == "done"
+
+
+def test_scheduler_one_detection_job_on_gpu():
+    """Only `gpu_slots` detection jobs run at once; proxy/render jobs may run alongside them."""
+    import threading
+    from collections import deque
+
+    from speedcam.server.jobs import Job, JobManager
+
+    m = JobManager.__new__(JobManager)  # scheduler state only, no worker threads
+    m.slots, m.gpu_slots, m.cv = 2, 1, threading.Condition()
+    m.running = {"r": Job("r", "p1", "analyze", ".")}
+    m.pending = deque([Job("a", "p2", "analyze", "."), Job("b", "p1", "render", "."), Job("c", "p3", "proxy", ".")])
+    assert m._next().id == "c"  # p2's analysis waits for the GPU, p1 is busy
+    m.running = {}
+    assert m._next().id == "a"
