@@ -68,6 +68,9 @@ export interface Vehicle {
   frame_entry: number; frame_exit: number; dt_s: number; path_length_m: number; chord_m: number;
   speed_kmh: number; speed_line_kmh: number; disagreement_pct: number; fit_residual_m: number;
   accel_mps2: number; max_gap_s: number; n_points: number; mean_conf: number; valid: boolean; flags: string;
+  speed_max_kmh: number; speed_min_kmh: number; speed_sigma_kmh: number | null; t_max_s: number | null;
+  d_max_m: number | null; speed_trend_pct: number | null;
+  profile: { t: number[]; d: number[]; v: number[] } | null;
 }
 
 export interface Stats {
@@ -79,6 +82,8 @@ export interface Stats {
 export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
+  stats_max?: Stats; by_direction_max?: Record<string, Stats>;
+  calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
   run: Record<string, any>; calibration: CalibrationResult;
   render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string } | null;
 }

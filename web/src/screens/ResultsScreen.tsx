@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import "../components/speed-profile.css";
 import { api, fmt, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
 import Histogram from "../components/Histogram";
 import ProgressBar from "../components/ProgressBar";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
+import SpeedProfile from "../components/SpeedProfile";
 
 interface Props { project: Project; onChanged: (p: Project) => void }
 
@@ -14,7 +16,8 @@ const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "t_entry_s", label: "Entry s", d: 2 },
   { key: "dt_s", label: "Δt s", d: 3 },
   { key: "path_length_m", label: "Path m", d: 2 },
-  { key: "speed_kmh", label: "km/h", d: 1, title: "Arc-length regression (primary)" },
+  { key: "speed_max_kmh", label: "Max", d: 1, title: "Highest momentary speed between the lines (0.5 s window)" },
+  { key: "speed_kmh", label: "Avg", d: 1, title: "Average A→B: arc-length regression" },
   { key: "speed_line_kmh", label: "Lines", d: 1, title: "Line-crossing audit speed" },
   { key: "disagreement_pct", label: "Δ %", d: 2 },
   { key: "fit_residual_m", label: "Resid m", d: 3 },
@@ -31,11 +34,16 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   const [source, setSource] = useState<"render" | "proxy">("proxy");
   const [showOverlay, setShowOverlay] = useState(true);
   const [overlay, setOverlay] = useState<OverlayData | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [metric, setMetric] = useState<"max" | "avg">("max");
   const [renderJob, setRenderJob] = useState<string | null>(project.jobs.find((j) => j.kind === "render")?.id ?? null);
   const rs = project.config.render as any;
   const [rset, setRset] = useState({
     mode: rs.mode, output_fps: rs.output_fps ?? "", playback_speed: rs.playback_speed, lut: rs.lut ?? "",
     speed_limit_kmh: rs.speed_limit_kmh,
+    panel: rs.panel ?? "right", panel_layout: rs.panel_layout ?? "overlay", panel_sort: rs.panel_sort ?? "latest",
+    panel_rows: rs.panel_rows ?? 7, title: rs.title ?? "", subtitle: rs.subtitle ?? "", footer: rs.footer ?? "",
+    show_hud: !!rs.show_hud,
     scale: rs.scale === 0.5 && project.info.height > 1080 ? +(1080 / project.info.height).toFixed(4) : rs.scale,
   });
 
@@ -69,14 +77,24 @@ export default function ResultsScreen({ project, onChanged }: Props) {
     });
   }, [res, dir, validOnly, sort]);
 
-  const stats: Stats | undefined = res ? (dir === "all" ? res.stats : res.by_direction[dir]) : undefined;
-  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (dir === "all" || v.direction === dir)).map((v) => v.speed_kmh) : [];
+  const useMax = metric === "max" && !!res?.stats_max;
+  const stats: Stats | undefined = res
+    ? (useMax ? (dir === "all" ? res.stats_max : res.by_direction_max?.[dir]) : (dir === "all" ? res.stats : res.by_direction[dir]))
+    : undefined;
+  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (dir === "all" || v.direction === dir))
+    .map((v) => (useMax ? v.speed_max_kmh : v.speed_kmh)) : [];
+  // profile shown: the clicked vehicle, else the fastest valid one
+  const fastest = res?.vehicles.filter((v) => v.valid).sort((a, b) => b.speed_max_kmh - a.speed_max_kmh)[0];
+  const shown = res?.vehicles.find((v) => v.track_id === selected) ?? fastest;
+  const limit = +rset.speed_limit_kmh || 50;
 
   const startRender = async () => {
     try {
       const body: Record<string, unknown> = {
         mode: rset.mode, playback_speed: +rset.playback_speed, scale: +rset.scale, speed_limit_kmh: +rset.speed_limit_kmh,
         output_fps: rset.output_fps === "" ? null : +rset.output_fps, lut: rset.lut || null,
+        panel: rset.panel, panel_layout: rset.panel_layout, panel_sort: rset.panel_sort, panel_rows: +rset.panel_rows,
+        title: rset.title, subtitle: rset.subtitle, footer: rset.footer, show_hud: rset.show_hud,
       };
       setRenderJob((await api.render(project.id, body)).id);
     } catch (e) { setErr(String(e)); }
@@ -111,6 +129,17 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           )}
         </div>
 
+        {shown && (
+          <section className="panel">
+            <div className="panel-head">
+              <h3>Speed along the section</h3>
+              <span className="tag">#{shown.track_id} {shown.class} · {shown.direction.replace("->", " → ")}</span>
+              {selected === null && <span className="muted small">fastest vehicle · click a row to pick another</span>}
+            </div>
+            <SpeedProfile v={shown} limit={limit} tNow={tNow} />
+          </section>
+        )}
+
         <section className="panel">
           <div className="panel-head">
             <h3>Vehicles</h3>
@@ -139,10 +168,11 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                 {rows.map((v) => {
                   const active = tNow >= v.t_entry_s - 0.5 && tNow <= v.t_exit_s + 0.5;
                   return (
-                    <tr key={v.track_id} className={`${active ? "active" : ""} ${v.valid ? "" : "invalid"}`} onClick={() => seekTo(v)}>
+                    <tr key={v.track_id} className={`${active ? "active" : ""} ${v.valid ? "" : "invalid"} ${shown?.track_id === v.track_id ? "selected" : ""}`}
+                      onClick={() => { setSelected(v.track_id); seekTo(v); }}>
                       {COLS.map((c) => {
                         const x = v[c.key];
-                        return <td key={c.key} className={c.key === "speed_kmh" ? "num strong" : typeof x === "number" ? "num" : ""}>
+                        return <td key={c.key} className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
                           {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
                         </td>;
                       })}
@@ -172,7 +202,17 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           <div className="panel-head">
             <h3>Speed statistics</h3>
             {dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
+            <span className="grow" />
+            {res.stats_max && (
+              <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
+                <button className={useMax ? "active" : ""} onClick={() => setMetric("max")}>Max</button>
+                <button className={!useMax ? "active" : ""} onClick={() => setMetric("avg")}>Average</button>
+              </div>
+            )}
           </div>
+          {res.calibration_check?.status === "suspect" && (
+            <div className="banner warn small calib-check"><b>Check the calibration.</b> {res.calibration_check.message}</div>
+          )}
           <div className="tiles">
             <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
             <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
@@ -185,6 +225,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           </div>
           <p className="footnote">{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
           <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
+          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines." : "Per vehicle: average speed from line A to line B."}</p>
         </section>
 
         <section className="panel">
@@ -220,6 +261,33 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             <input type="number" value={rset.speed_limit_kmh} onChange={(e) => setRset({ ...rset, speed_limit_kmh: e.target.value })} />
             <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
             <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
+          </div>
+          <h4 className="subhead">Presentation</h4>
+          <div className="form-grid compact">
+            <label title="Lists every vehicle's max speed as it crosses the second line, with totals">Vehicle panel</label>
+            <select value={rset.panel} onChange={(e) => setRset({ ...rset, panel: e.target.value })}>
+              <option value="right">right side</option><option value="left">left side</option><option value="none">off</option>
+            </select>
+            {rset.panel !== "none" && <>
+              <label title="Overlay keeps the video's 16:9 frame; extend adds the panel beside it (wider video)">Panel layout</label>
+              <select value={rset.panel_layout} onChange={(e) => setRset({ ...rset, panel_layout: e.target.value })}>
+                <option value="overlay">over the video (16:9)</option><option value="extend">beside the video (wider)</option>
+              </select>
+              <label>List order</label>
+              <select value={rset.panel_sort} onChange={(e) => setRset({ ...rset, panel_sort: e.target.value })}>
+                <option value="latest">latest first</option><option value="fastest">fastest first</option>
+              </select>
+              <label>Rows</label>
+              <input type="number" min={1} max={20} value={rset.panel_rows} onChange={(e) => setRset({ ...rset, panel_rows: e.target.value })} />
+              <label>Title</label>
+              <input type="text" value={rset.title} placeholder="e.g. street, city" onChange={(e) => setRset({ ...rset, title: e.target.value })} />
+              <label>Subtitle</label>
+              <input type="text" value={rset.subtitle} placeholder="e.g. date · time" onChange={(e) => setRset({ ...rset, subtitle: e.target.value })} />
+              <label>Footer</label>
+              <input type="text" value={rset.footer} placeholder="e.g. source, handle" onChange={(e) => setRset({ ...rset, footer: e.target.value })} />
+            </>}
+            <label title="Small time / frame readout in the corner">Technical readout</label>
+            <input type="checkbox" checked={rset.show_hud} onChange={(e) => setRset({ ...rset, show_hud: e.target.checked })} />
           </div>
           <div className="row end">
             {renderRunning ? <button className="danger" onClick={() => renderJob && api.cancel(renderJob)}>Cancel render</button>

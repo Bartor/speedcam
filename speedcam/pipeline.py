@@ -18,7 +18,7 @@ import pandas as pd
 from . import calibration
 from .config import ProjectConfig
 from .detection import make_detector
-from .speed import compute_speeds
+from .speed import calibration_check, compute_speeds
 from .stabilization import Stabilizer, transform_points
 from .stats import summarize
 from .timing import check_timing, probe
@@ -328,10 +328,11 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
                   timing_msgs: list[str], run: dict) -> dict:
     cols = ["track_id", "class", "direction", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
-            "path_length_m", "chord_m", "speed_kmh", "speed_line_kmh", "disagreement_pct",
+            "path_length_m", "chord_m", "speed_kmh", "speed_max_kmh", "speed_min_kmh", "speed_sigma_kmh",
+            "t_max_s", "d_max_m", "speed_trend_pct", "speed_line_kmh", "disagreement_pct",
             "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags"]
     pd.DataFrame(results, columns=cols).to_csv(out / "results.csv", index=False, float_format="%.4f")
-    valid_speeds = [r["speed_kmh"] for r in results if r["valid"]]
+    valid = [r for r in results if r["valid"]]
     summary = {
         "source": cfg.source,
         "capture_fps": fps,
@@ -340,11 +341,17 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
         "calibration": cal.summary(),
         "timing_warnings": timing_msgs,
         "run": run,
-        "stats": summarize(valid_speeds, cfg.stats, n_total=len(results)),
+        "stats": summarize([r["speed_kmh"] for r in valid], cfg.stats, n_total=len(results)),
+        "stats_max": summarize([r["speed_max_kmh"] for r in valid], cfg.stats, n_total=len(results)),
         "by_direction": {
-            d: summarize([r["speed_kmh"] for r in results if r["valid"] and r["direction"] == d], cfg.stats)
+            d: summarize([r["speed_kmh"] for r in valid if r["direction"] == d], cfg.stats)
             for d in ("A->B", "B->A")
         },
+        "by_direction_max": {
+            d: summarize([r["speed_max_kmh"] for r in valid if r["direction"] == d], cfg.stats)
+            for d in ("A->B", "B->A")
+        },
+        "calibration_check": calibration_check(results),
         "vehicles": results,
     }
     (out / "results.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

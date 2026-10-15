@@ -3,6 +3,8 @@
 Primary: arc length of the smoothed trajectory vs. time, linear regression over
 the segment between line A and line B (handles lane changes and curves).
 Audit: sub-frame line-crossing times, speed = chord between crossings / Δt.
+Momentary: |velocity| from a local quadratic fit over a short window (default 0.5 s),
+giving a speed profile between the lines with its max, min and noise level.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ class TrackRender:
 
     frames: np.ndarray  # contiguous frame indices
     world: np.ndarray  # (n, 2) smoothed world positions
-    provisional_kmh: np.ndarray  # (n,) running-fit speed between the lines, NaN elsewhere
+    inst_kmh: np.ndarray  # (n,) momentary speed along the whole track
     t_first: Optional[float] = None
     t_second: Optional[float] = None
     result: Optional[dict] = None
@@ -55,6 +57,20 @@ def smooth(xy: np.ndarray, fps: float, s: SpeedSettings) -> np.ndarray:
     return savgol_filter(xy, win, s.smooth_poly, axis=0, mode="interp")
 
 
+def momentary_speed(P: np.ndarray, fps: float, window_s: float) -> np.ndarray:
+    """Speed (km/h) per frame from a local quadratic fit over `window_s` (Savitzky-Golay derivative).
+
+    Shorter windows follow speed changes faster but pass more box-centre wobble; on 4K drone
+    footage 0.5 s keeps the noise around +-0.4 km/h without biasing the maximum upwards.
+    """
+    n = odd_window(int(round(window_s * fps)), 2, len(P))
+    if n <= 2:
+        v = np.gradient(P, 1 / fps, axis=0)
+    else:
+        v = savgol_filter(P, n, 2, deriv=1, delta=1 / fps, axis=0, mode="interp")
+    return np.hypot(v[:, 0], v[:, 1]) * 3.6
+
+
 def first_crossing(t: np.ndarray, P: np.ndarray, line: np.ndarray, extend: float) -> Optional[Crossing]:
     """Sub-frame crossing of a polyline P(t) with segment `line` (extended by `extend` × length)."""
     l0, l1 = line
@@ -74,18 +90,6 @@ def first_crossing(t: np.ndarray, P: np.ndarray, line: np.ndarray, extend: float
     return Crossing(hits[0][0], hits[0][1], len(hits))
 
 
-def _running_slopes(ts: np.ndarray, ss: np.ndarray, min_span: float) -> np.ndarray:
-    """Least-squares slope over samples [0..i] for every i (cumulative sums)."""
-    n = np.arange(1, len(ts) + 1)
-    St, Ss = np.cumsum(ts), np.cumsum(ss)
-    Stt, Sts = np.cumsum(ts * ts), np.cumsum(ts * ss)
-    den = n * Stt - St ** 2
-    with np.errstate(divide="ignore", invalid="ignore"):
-        slope = (n * Sts - St * Ss) / den
-    slope[(ts - ts[0]) < min_span] = np.nan
-    return slope
-
-
 def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
                   line_a: np.ndarray, line_b: np.ndarray, s: SpeedSettings,
                   cls: str = "car", mean_conf: float = 1.0) -> Optional[TrackRender]:
@@ -101,7 +105,8 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
     t = full / fps
     P = smooth(P_raw, fps, s)
 
-    render = TrackRender(frames=full, world=P, provisional_kmh=np.full(len(full), np.nan), cls=cls)
+    inst = momentary_speed(P_raw, fps, s.momentary_window_s)
+    render = TrackRender(frames=full, world=P, inst_kmh=inst, cls=cls)
     ca = first_crossing(t, P, line_a, s.line_extend)
     cb = first_crossing(t, P, line_b, s.line_extend)
     render.crossed = ("A" if ca else "") + ("B" if cb else "")
@@ -179,15 +184,67 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         "flags": ";".join(flags),
     }
 
-    # Provisional (running-fit) speed for frames between the crossings.
-    s_full = np.interp(t, td, sd)
-    between = (t > t_in) & (t < t_out)
-    if between.any():
-        tt = np.concatenate([[t_in], t[between]])
-        st = np.concatenate([[np.interp(t_in, td, sd)], s_full[between]])
-        render.provisional_kmh[between] = _running_slopes(tt, st, 0.15)[1:] * 3.6
+    result.update(_profile(t, inst, P_raw, td, sd, t_in, t_out, fps, s, v_arc * 3.6, direction))
     render.t_first, render.t_second, render.result = t_in, t_out, result
     return render
+
+
+def _profile(t, inst, P_raw, td, sd, t_in, t_out, fps, s: SpeedSettings, avg_kmh: float, direction: str) -> dict:
+    """Momentary speed between the lines: max/min, where the max happened, noise and a compact profile."""
+    seg = (t >= t_in) & (t <= t_out)
+    if seg.sum() < 3:
+        return {"speed_max_kmh": avg_kmh, "speed_min_kmh": avg_kmh, "speed_sigma_kmh": None, "t_max_s": None,
+                "d_max_m": None, "speed_trend_pct": None, "profile": None}
+    v = inst[seg]
+    ts = t[seg]
+    d = np.interp(ts, td, sd) - np.interp(t_in, td, sd)  # distance travelled since the first line
+    # noise: deviation from a much smoother version of the same curve (real speed changes are slow)
+    ref = momentary_speed(P_raw, fps, max(2.0, 4 * s.momentary_window_s))[seg]
+    sigma = float(np.std(v - ref))
+    k = int(np.argmax(v))
+    # speed change from the first to the second half of the stretch, as a share of the average,
+    # signed towards line B: shared by all vehicles it points at calibration, not driving
+    half = d <= d[-1] / 2
+    trend = (v[~half].mean() - v[half].mean()) / avg_kmh * 100 if half.any() and (~half).any() else None
+    if trend is not None and direction == "B->A":
+        trend = -trend
+    step = max(1, int(np.ceil(len(v) / 120)))
+    return {
+        "speed_max_kmh": float(v.max()),
+        "speed_min_kmh": float(v.min()),
+        "speed_sigma_kmh": sigma,
+        "t_max_s": float(ts[k]),
+        "d_max_m": float(d[k]),
+        "speed_trend_pct": None if trend is None else float(trend),
+        "profile": {"t": np.round(ts[::step] - t_in, 3).tolist(), "d": np.round(d[::step], 2).tolist(),
+                    "v": np.round(v[::step], 2).tolist()},
+    }
+
+
+def calibration_check(results: list[dict], min_vehicles: int = 5) -> dict:
+    """Use the traffic to check the calibration: drivers differ, geometry doesn't.
+
+    If momentary speed changes by the same share along A->B for every vehicle, a wrong
+    perspective/scale is the likely cause, and max speeds are biased by about that much.
+    """
+    tr = np.array([r["speed_trend_pct"] for r in results if r["valid"] and r.get("speed_trend_pct") is not None])
+    out: dict = {"n": int(len(tr))}
+    if len(tr) < min_vehicles:
+        out["status"] = "insufficient"
+        return out
+    mean, sd = float(tr.mean()), float(tr.std(ddof=1))
+    se = sd / np.sqrt(len(tr))
+    out.update(mean_pct=mean, sd_pct=sd)
+    if abs(mean) > 3 and abs(mean) > 3 * se:
+        out["status"] = "suspect"
+        out["message"] = (
+            f"Every vehicle's momentary speed {'rises' if mean > 0 else 'falls'} by about {abs(mean):.0f}% "
+            f"from line A to line B (spread {sd:.1f}%). Real drivers vary; a shared trend points at the "
+            "calibration (perspective or a wrong distance). Max speeds are biased by up to that much. "
+            "Re-check the measured distances, and make the polygon span the whole A-B stretch.")
+    else:
+        out["status"] = "ok"
+    return out
 
 
 def compute_speeds(tracks: pd.DataFrame, fps: float, line_a: np.ndarray, line_b: np.ndarray,

@@ -9,7 +9,8 @@ export interface OverlayData {
   det_frame: number[]; det_tid: number[]; det_corners: number[];
   tracks: Record<string, {
     f0: number; trail: number[]; prov: (number | null)[] | null; cls: string;
-    t_first: number | null; t_second: number | null; speed: number | null; dt: number | null; valid: boolean | null;
+    t_first: number | null; t_second: number | null; speed: number | null; speed_max?: number | null;
+    dt: number | null; valid: boolean | null;
   }>;
 }
 
@@ -81,12 +82,13 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
       let color = "#ffffff", text = `#${tid}${tr ? ` ${tr.cls}` : ""}`;
       if (tr && tr.speed !== null && tr.t_first !== null && tr.t_second !== null) {
         if (t >= tr.t_second) {
-          color = tr.valid ? speedColor(tr.speed, data.speed_limit_kmh) : "#c800c8";
-          text = `${tr.speed.toFixed(1)} km/h  Δt ${tr.dt!.toFixed(3)}s${tr.valid ? "" : " ?"}`;
+          const vmax = tr.speed_max ?? tr.speed;
+          color = tr.valid ? speedColor(vmax, data.speed_limit_kmh) : "#c800c8";
+          text = `max ${vmax.toFixed(1)} · avg ${tr.speed.toFixed(1)} km/h${tr.valid ? "" : " ?"}`;
         } else if (t > tr.t_first) {
           const v = tr.prov?.[frame - tr.f0];
           color = GREY;
-          text = v != null ? `~${Math.round(v)} km/h` : `#${tid} …`;
+          text = v != null ? `${Math.round(v)} km/h` : `#${tid} …`;
         }
       }
       const pts = [0, 1, 2, 3].map((k) => P(c[2 * k], c[2 * k + 1]));

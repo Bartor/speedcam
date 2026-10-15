@@ -112,6 +112,9 @@ class SpeedSettings(BaseModel):
     disagreement_invalidates: bool = False
     max_gap_s: float = 0.3
     min_points: int = 10
+    # window for momentary speed (max/min, profiles). Shorter follows changes faster but adds noise:
+    # measured on 4K footage, 0.25 s ~ +-0.8 km/h, 0.5 s ~ +-0.4 km/h.
+    momentary_window_s: float = 0.5
     line_extend: float = 0.1
 
 
@@ -125,6 +128,18 @@ class RenderSettings(BaseModel):
     quality: int = 20
     trail_s: float = 1.0
     speed_limit_kmh: float = 50.0
+    # presentation (social media): side panel listing every vehicle's max speed as it finishes
+    panel: Literal["none", "right", "left"] = "right"
+    panel_layout: Literal["overlay", "extend"] = "overlay"  # extend = video + panel side by side (wider output)
+    panel_width: float = 0.27  # fraction of the video width
+    panel_sort: Literal["latest", "fastest"] = "latest"
+    panel_rows: int = 7
+    title: str = ""
+    subtitle: str = ""
+    footer: str = ""
+    show_hud: bool = False  # technical time/frame line in the corner
+    show_unmeasured: bool = False  # boxes on vehicles that never cross both lines (parked cars etc.)
+    font: Optional[str] = None  # .ttf for text; default Segoe UI / DejaVu Sans
 
 
 class StatsSettings(BaseModel):

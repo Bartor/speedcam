@@ -233,12 +233,40 @@ def test_track_missing_a_line_has_no_result():
     assert analyze_track(1, frames[keep], xy[keep], 120.0, *LINES, SpeedSettings()).result is None
 
 
-def test_provisional_speed_between_lines():
-    frames, xy = _track(72.0)
+def test_momentary_speed_constant():
+    frames, xy = _track(72.0, noise=0.02)
     r = analyze_track(1, frames, xy, 120.0, *LINES, SpeedSettings())
-    prov = r.provisional_kmh[np.isfinite(r.provisional_kmh)]
-    assert len(prov) > 0
-    np.testing.assert_allclose(prov, 72.0, rtol=0.01)
+    res = r.result
+    assert res["speed_max_kmh"] == pytest.approx(72.0, abs=1.0)
+    assert res["speed_min_kmh"] == pytest.approx(72.0, abs=1.0)
+    assert res["speed_sigma_kmh"] < 0.5
+    assert abs(res["speed_trend_pct"]) < 1
+    assert len(res["profile"]["v"]) <= 121 and res["profile"]["d"][0] == pytest.approx(0, abs=0.5)
+
+
+def test_momentary_speed_finds_peak():
+    # 50 km/h, a 2 s burst up to 80 km/h in the middle of the section, then back to 50
+    fps, dt = 120.0, 1 / 120.0
+    t = np.arange(0, 6, dt)
+    v = 50 / 3.6 + (30 / 3.6) * np.exp(-((t - 3.0) / 0.5) ** 2)
+    x = np.cumsum(v) * dt - 5
+    xy = np.column_stack([x, np.zeros_like(x)])
+    lines = (np.array([[10.0, -10], [10.0, 10]]), np.array([[70.0, -10], [70.0, 10]]))
+    res = analyze_track(1, np.arange(len(t)), xy, fps, *lines, SpeedSettings()).result
+    assert res["speed_max_kmh"] == pytest.approx(80.0, abs=1.5)  # 0.5 s window slightly flattens the peak
+    assert res["speed_min_kmh"] == pytest.approx(50.0, abs=1.0)
+    assert res["speed_kmh"] < res["speed_max_kmh"] - 10  # the A->B average hides the peak
+
+
+def test_calibration_check_flags_shared_trend():
+    from speedcam.speed import calibration_check
+
+    def veh(trend):
+        return {"valid": True, "speed_trend_pct": trend}
+
+    assert calibration_check([veh(13 + d) for d in (-2, -1, 0, 1, 2, 3)])["status"] == "suspect"
+    assert calibration_check([veh(d) for d in (-6, 4, -2, 5, -3, 1)])["status"] == "ok"
+    assert calibration_check([veh(10)])["status"] == "insufficient"
 
 
 # ---------------------------------------------------------------- stats

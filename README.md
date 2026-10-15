@@ -81,13 +81,26 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    settings before the full run, which streams the same tracking preview and can be
    cancelled.
 4. **Results:** the proxy video, with a live tracking overlay drawn in the browser
-   (boxes, trails, provisional then final speeds), sits beside the vehicle table.
-   No render is needed for review. If nothing was measured, the page says where
-   tracks were lost (few detections, or crossing only one line). Clicking a row seeks to that vehicle. The page shows a histogram; mean,
-   p85 and p95 with confidence intervals; and the ITE sample size needed against
-   the valid n. You can export CSV, JSON and MP4. **Recompute speeds** re-runs only
-   the speed step, so you can change thresholds, lines or calibration without
-   re-detecting.
+   (boxes, trails, momentary speed between the lines, then max and average),
+   sits beside the vehicle table. No render is needed for review. Each vehicle has a
+   **max** (highest momentary speed between A and B) and an **average** (A→B).
+   Click a row to seek to it and plot its **speed along the section**: the momentary
+   speed curve with max/min marked, a ±2σ noise band, and the average and speed-limit
+   lines. Statistics and the histogram switch between max and average. They include
+   mean, p85 and p95 with confidence intervals, plus the ITE sample size needed
+   against the valid n. A **calibration check** warns when every vehicle's speed
+   rises or falls by the same share along A→B. Drivers vary but geometry doesn't, so
+   a shared trend means a calibration error that biases max speeds. If nothing was
+   measured, the page says where tracks were lost. Export CSV, JSON and MP4.
+   **Recompute speeds** re-runs only the speed step, without re-detecting.
+5. **Render:** an annotated MP4 for sharing. Vehicles get speed pills (live
+   momentary speed between the lines, then max, coloured against the limit). An
+   optional side panel (left or right, over the 16:9 frame or beside it) shows:
+   a title and subtitle, a speed-limit sign, running totals (vehicles, over the
+   limit, top speed, p85), the latest vehicle's speed curve, and the list of
+   vehicles with their max and average speeds, latest or fastest first. A footer is
+   optional. Text uses Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any
+   `.ttf` set in `render.font`.
 
 The API lives under `/api` (OpenAPI at `/docs`). It covers projects, frames,
 `proxy.mp4` with range requests, calibration, analyze, render, results, job
@@ -119,7 +132,7 @@ speedcam synth --speed 50                     # synthetic validation clip + conf
 | Stabilization | Reference corners are tracked into each frame with pyramidal Lucas–Kanade, then fitted with RANSAC (similarity by default). Vehicles are masked. Falls back to ORB vs. reference, then ORB vs. the previous frame (chained), then the last transform (logged). Frames are never warped for analysis. |
 | Detection | Ultralytics YOLO, OBB or axis-aligned, with optional tiling and NMS across tiles. DOTA `small/large vehicle` map to car/truck. |
 | Tracking | ByteTrack (supervision) on reference-frame boxes. |
-| Speed | Savitzky–Golay smoothing of the world trajectory. **Primary:** linear regression of arc length vs. time between the sub-frame crossings of A and B. **Audit:** chord / Δt. Flags: `disagree` (>2%), `accel` (>8 m/s²), `residual` (jumps ⇒ ID switch), `gap`, `multi_cross`. |
+| Speed | Savitzky–Golay smoothing of the world trajectory. **Momentary:** |velocity| from a local quadratic fit over 0.5 s (`speed.momentary_window_s`; measured noise about ±0.4 km/h on 4K footage, ±0.8 at 0.25 s), giving max/min, where the max happened, and a profile. **Average:** linear regression of arc length vs. time between the sub-frame crossings of A and B. **Audit:** chord / Δt. Flags: `disagree` (>2%), `accel` (>8 m/s²), `residual` (jumps ⇒ ID switch), `gap`, `multi_cross`. |
 | Stats | t-interval for the mean, bootstrap CIs for p85/p95, ITE `n = (S·K/E)²·(2+U²)/2`. |
 
 Outputs in the project or `--out` folder: `tracks.parquet`, `transforms.npz`,
