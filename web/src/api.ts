@@ -46,8 +46,21 @@ export interface Job {
 
 export interface Project {
   id: string; name: string; created: number; info: VideoInfo; config: ProjectConfig;
-  status: Record<string, boolean>; jobs: Job[]; timing_warnings: string[];
+  status: Record<string, boolean>; jobs: Job[]; timing_warnings: string[]; source_exists: boolean;
   calibration_result: CalibrationResult; proxy_job?: string;
+}
+
+export interface LibraryProject {
+  id: string; name: string; source: string; created: number; opened: number | null; updated: number | null;
+  last_screen: string | null; source_exists: boolean; width: number; height: number;
+  capture_fps: number | null; duration_s: number | null; has_proxy: number; has_results: number; has_render: number;
+  calibrated: number; n_vehicles: number | null; n_valid: number | null; mean_kmh: number | null; p85_kmh: number | null;
+  analyzed: number | null;
+}
+
+export interface JobRecord {
+  id: string; kind: string; status: string; created: number; started: number | null; finished: number | null;
+  error: string | null; result: Record<string, any> | null;
 }
 
 export interface Vehicle {
@@ -90,7 +103,12 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 export const api = {
   fs: (path?: string) => req<{ path: string; parent: string; entries: { name: string; path: string; dir: boolean; size?: number }[] }>(
     "GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  projects: () => req<{ id: string; name: string; created: number; source: string }[]>("GET", "/api/projects"),
+  projects: () => req<LibraryProject[]>("GET", "/api/projects"),
+  opened: (id: string, screen: string) => req<{ ok: boolean }>("POST", `/api/projects/${id}/opened`, { screen }),
+  relink: (id: string, source: string) => req<Project & { relink_warnings: string[] }>("POST", `/api/projects/${id}/relink`, { source }),
+  remove: (id: string) => req<{ deleted: string }>("DELETE", `/api/projects/${id}`),
+  jobs: (id: string) => req<JobRecord[]>("GET", `/api/projects/${id}/jobs`),
+  thumbUrl: (id: string) => `/api/projects/${id}/thumb.jpg`,
   create: (source: string, name?: string) => req<Project>("POST", "/api/projects", { source, name }),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),
   patch: (id: string, body: Record<string, unknown>) => req<Project>("PATCH", `/api/projects/${id}`, body),
@@ -189,6 +207,31 @@ export function useDebounced<T>(fn: (v: T) => void, ms: number) {
     window.clearTimeout(t.current);
     t.current = window.setTimeout(() => f.current(v), ms);
   };
+}
+
+/** Report the open project + screen to the server, so the library can resume there. */
+export function trackOpenedProjects() {
+  let last = "";
+  const report = () => {
+    const m = window.location.hash.match(/^#\/p\/([a-z0-9-]+)(?:\/(\w+))?/);
+    if (!m) return;
+    const key = `${m[1]}/${m[2] ?? "import"}`;
+    if (key === last) return;
+    last = key;
+    api.opened(m[1], m[2] ?? "import").catch(() => {});
+  };
+  window.addEventListener("hashchange", report);
+  report();
+}
+
+export function timeAgo(t: number | null | undefined): string {
+  if (!t) return "never";
+  const s = Date.now() / 1000 - t;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(t * 1000).toLocaleDateString();
 }
 
 export const fmt = (v: number | null | undefined, d = 1) =>

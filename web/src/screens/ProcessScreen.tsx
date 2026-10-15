@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, fmt, Project, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
+import "../components/library.css";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onDone: () => void }
 
@@ -11,7 +12,6 @@ const FIELDS: Field[] = [
   { section: "detection", key: "conf", label: "Confidence", type: "num" },
   { section: "detection", key: "imgsz", label: "Inference size", type: "num" },
   { section: "detection", key: "tile", label: "Tile size (0 = off)", type: "num", hint: "Tile 4K frames when vehicles are small, e.g. 1024" },
-  { section: "stabilization", key: "enabled", label: "Stabilize", type: "bool" },
   { section: "stabilization", key: "model", label: "Motion model", type: "select", options: ["similarity", "affine", "homography"] },
   { section: "stabilization", key: "features", label: "Registration", type: "select", options: ["klt", "orb", "sift"] },
   { section: "tracking", key: "lost_buffer_s", label: "Track buffer (s)", type: "num" },
@@ -39,6 +39,10 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
   };
   const showPv = !!pvJobId && (pvRunning || !running);
   const live = showPv ? pv : job;
+
+  const setStab = async (enabled: boolean) => {
+    try { onChanged(await api.patch(project.id, { stabilization: { enabled } })); } catch (e) { setErr(String(e)); }
+  };
 
   const setField = async (f: Field, raw: string | boolean) => {
     const v = f.type === "num" ? parseFloat(raw as string) : raw;
@@ -75,6 +79,22 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
             : <button className="danger" onClick={() => jobId && api.cancel(jobId)}>Cancel</button>}
           {project.status.results_json && !running && <button onClick={onDone}>View results →</button>}
         </div>
+        <div className="camera-mode">
+          <span className="muted small">Camera</span>
+          <div className="seg-ctl">
+            <button className={cfg.stabilization.enabled ? "active" : ""} disabled={running}
+              onClick={() => setStab(true)} title="Register every frame to the reference frame (KLT); needed when the drone sways or drifts">
+              Hovering: stabilize
+            </button>
+            <button className={!cfg.stabilization.enabled ? "active" : ""} disabled={running}
+              onClick={() => setStab(false)} title="Treat every frame as aligned with the reference frame; faster">
+              Still: skip stabilization
+            </button>
+          </div>
+          <span className="muted small">{cfg.stabilization.enabled
+            ? "Every frame is aligned to the reference frame."
+            : "Frames are assumed to line up with the reference frame. Any camera drift becomes position (and speed) error."}</span>
+        </div>
         <div className="row small">
           <button disabled={pvRunning || running} onClick={startPreview}>Preview tracking</button>
           <span>from frame</span>
@@ -95,6 +115,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
                 Preview: {pv.end.result.detections_per_frame?.toFixed(1)} detections/frame · {pv.end.result.tracks} tracks
                 ({pv.end.result.tracks_crossing_both} crossed both lines, {pv.end.result.tracks_crossing_a_only} only A,
                 {" "}{pv.end.result.tracks_crossing_b_only} only B) · {pv.end.result.registration_failures} registration failures
+                <DriftVerdict drift={pv.end.result.camera_drift} stabilized={cfg.stabilization.enabled} onSkip={() => setStab(false)} />
                 {pv.end.result.vehicles?.length > 0 && <> · speeds: {pv.end.result.vehicles.map((v: any) => `#${v.track_id} ${v.speed_kmh.toFixed(1)}${v.valid ? "" : "?"}`).join(", ")} km/h</>}
               </div>
             )}
@@ -141,6 +162,25 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
         </div>
         <p className="muted small">Model weights are downloaded by Ultralytics on first use. Changing speed thresholds only needs “Recompute” on the results page.</p>
       </section>
+    </div>
+  );
+}
+
+/** After a preview run: is the camera still enough to skip stabilization? */
+function DriftVerdict({ drift, stabilized, onSkip }: {
+  drift?: { max_px: number; p95_px: number; max_m: number } | null; stabilized: boolean; onSkip: () => void;
+}) {
+  if (!stabilized) return <div className="muted">Camera drift not measured (stabilization is off). Switch to “Hovering” and preview again to measure it.</div>;
+  if (!drift) return null;
+  const cm = drift.max_m * 100;
+  const still = drift.max_px < 0.5;
+  return (
+    <div className={still ? "" : "warn-text"}>
+      Camera drift during preview: max {drift.max_px.toFixed(2)} px (≈ {cm.toFixed(1)} cm on the ground), p95 {drift.p95_px.toFixed(2)} px.{" "}
+      {still ? <>The camera is effectively still: skipping stabilization is safe here. <button className="chip" onClick={onSkip}>Skip stabilization</button></>
+        : drift.max_px < 2 ? "Small drift: skipping stabilization would add up to that much position error. Keep it on for the most accurate speeds."
+          : "The camera moves: keep stabilization on."}
+      {" "}<span className="muted">(Measured over the preview only; check a longer stretch if the drone was gusting.)</span>
     </div>
   );
 }

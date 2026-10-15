@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, fmt, Project, useJob } from "../api";
+import { api, fmt, JobRecord, Project, timeAgo, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
+import "../components/library.css";
+import ProjectLibrary from "../components/ProjectLibrary";
+
 
 interface Props {
   project: Project | null;
@@ -18,13 +21,11 @@ export default function ImportScreen({ project, onProject, onChanged, onNext }: 
 }
 
 function Picker({ onProject }: { onProject: (p: Project) => void }) {
-  const [recent, setRecent] = useState<Awaited<ReturnType<typeof api.projects>>>([]);
   const [dir, setDir] = useState<Awaited<ReturnType<typeof api.fs>> | null>(null);
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { api.projects().then(setRecent).catch(() => {}); }, []);
   const browse = (p?: string) => api.fs(p).then(setDir).catch((e) => setErr(String(e)));
   useEffect(() => { browse(localStorage.getItem("speedcam.lastDir") ?? undefined); }, []);
 
@@ -41,8 +42,9 @@ function Picker({ onProject }: { onProject: (p: Project) => void }) {
   };
 
   return (
-    <div className="page two-col">
-      <section className="panel grow">
+    <div className="page two-col import-page">
+      <ProjectLibrary />
+      <section className="panel side new-project">
         <h2>New project</h2>
         <p className="muted">The video is read from disk in place, nothing is uploaded. A 1080p H.264 proxy is built for scrubbing.</p>
         <div className="row">
@@ -74,18 +76,6 @@ function Picker({ onProject }: { onProject: (p: Project) => void }) {
           </div>
         )}
       </section>
-      <section className="panel side">
-        <h2>Recent projects</h2>
-        {recent.length === 0 && <p className="muted">None yet.</p>}
-        <ul className="list">
-          {recent.map((r) => (
-            <li key={r.id} onClick={() => (window.location.hash = `#/p/${r.id}/calibrate`)}>
-              <div>{r.name}</div>
-              <div className="muted small ellipsis">{r.source}</div>
-            </li>
-          ))}
-        </ul>
-      </section>
     </div>
   );
 }
@@ -96,6 +86,21 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
   const [fps, setFps] = useState(String(cfg.capture_fps ?? info.suggested_capture_fps));
   const [dur, setDur] = useState(cfg.real_duration_s ? String(cfg.real_duration_s) : "");
   const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState(project.name);
+  const [relinkPath, setRelinkPath] = useState("");
+  const [relinkMsg, setRelinkMsg] = useState<string[] | null>(null);
+  const [history, setHistory] = useState<JobRecord[]>([]);
+  useEffect(() => { api.jobs(project.id).then(setHistory).catch(() => {}); }, [project.id, project.status]);
+  const rename = async () => {
+    if (name.trim() && name !== project.name) onChanged(await api.patch(project.id, { name: name.trim() }));
+  };
+  const relink = async () => {
+    try {
+      const r = await api.relink(project.id, relinkPath.trim().replace(/^"|"$/g, ""));
+      setRelinkMsg(r.relink_warnings);
+      onChanged(r);
+    } catch (e) { setErr(String(e)); }
+  };
   const proxyJobId = project.proxy_job ?? project.jobs.find((j) => j.kind === "proxy")?.id;
   const proxy = useJob(proxyJobId, () => api.project(project.id).then(onChanged));
 
@@ -116,7 +121,20 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
   return (
     <div className="page two-col">
       <section className="panel grow">
-        <h2>{project.name}</h2>
+        <input className="title-input" value={name} onChange={(e) => setName(e.target.value)}
+          onBlur={rename} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} title="Rename project" />
+        {!project.source_exists && (
+          <div className="banner error">
+            <b>The source video is missing</b> (moved, renamed or on a drive that isn't connected): <code>{info.path}</code>
+            <div className="row">
+              <input className="grow" placeholder="New path to the same video" value={relinkPath} onChange={(e) => setRelinkPath(e.target.value)} />
+              <button className="primary" disabled={!relinkPath} onClick={relink}>Relink</button>
+            </div>
+          </div>
+        )}
+        {relinkMsg && (relinkMsg.length
+          ? <div className="banner warn">Relinked, but this file differs from the original: {relinkMsg.join("; ")}. Calibration and results may not match.</div>
+          : <div className="banner ok">Relinked: same resolution and frame count.</div>)}
         <table className="kv">
           <tbody>
             <tr><td>Source</td><td><code>{info.path}</code></td></tr>
@@ -164,6 +182,21 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
           <ProgressBar label={proxy.progress.stage ?? "queued"} done={proxy.progress.done} total={proxy.progress.total} />
         )}
         <p className="muted small">Calibration clicks use full-resolution stills decoded from the original, not the proxy.</p>
+        <h3>History</h3>
+        {history.length === 0 && <p className="muted small">No jobs yet.</p>}
+        <ul className="job-history">
+          {history.map((j) => (
+            <li key={j.id} title={j.error ?? ""}>
+              <span className={`status ${j.status === "done" ? "ok" : j.status === "error" ? "bad" : "warn"}`}>
+                {j.status === "done" ? "✓" : j.status === "error" ? "✕" : "•"}
+              </span>
+              <span className="grow">{j.kind}{j.status !== "done" ? ` (${j.status})` : ""}
+                {j.kind === "analyze" && j.result?.n_vehicles !== undefined && <span className="muted"> · {j.result.n_valid}/{j.result.n_vehicles} valid</span>}
+              </span>
+              <span className="muted">{timeAgo(j.finished ?? j.started ?? j.created)}</span>
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

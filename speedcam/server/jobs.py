@@ -12,7 +12,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..pipeline import Reporter
 
@@ -114,7 +114,9 @@ class Job:
 
 
 class JobManager:
-    def __init__(self):
+    def __init__(self, on_change: Optional[Callable[[Job], None]] = None):
+        """`on_change(job)` is called on every status transition (queued, running, finished)."""
+        self.on_change = on_change
         self.ctx = mp.get_context("spawn")
         self.jobs: dict[str, Job] = {}
         self.pending: deque[Job] = deque()
@@ -124,6 +126,13 @@ class JobManager:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
+    def _notify(self, job: Job) -> None:
+        if self.on_change:
+            try:
+                self.on_change(job)
+            except Exception:  # noqa: BLE001 - bookkeeping must never break the runner
+                pass
+
     def submit(self, project_id: str, kind: str, project_dir: Path, params: Optional[dict] = None) -> Job:
         job = Job(uuid.uuid4().hex[:12], project_id, kind, str(project_dir), params or {},
                   cancel_event=self.ctx.Event())
@@ -131,6 +140,7 @@ class JobManager:
             self.jobs[job.id] = job
             self.pending.append(job)
             self.cv.notify_all()
+        self._notify(job)
         return job
 
     def active_for(self, project_id: str) -> list[Job]:
@@ -142,6 +152,7 @@ class JobManager:
             while self.pending:
                 job = self.pending.popleft()
                 job.status, job.finished = "cancelled", time.time()
+                self._notify(job)
         job, proc = self.current, self._proc
         if job is None or proc is None or not proc.is_alive():
             return
@@ -158,6 +169,7 @@ class JobManager:
                 self.pending.remove(job)
                 job.status, job.finished = "cancelled", time.time()
                 job.seq += 1
+                self._notify(job)
             elif job.status == "running":
                 job.cancel_event.set()
         return job
@@ -171,6 +183,7 @@ class JobManager:
                 job.status, job.started = "running", time.time()
                 job.seq += 1
                 self.current = job
+            self._notify(job)
             self._run(job)
             self.current = None
 
@@ -225,3 +238,4 @@ class JobManager:
             job.status, job.error, job.traceback = "error", final.get("message"), final.get("traceback")
         job.finished = time.time()
         job.seq += 1
+        self._notify(job)

@@ -8,16 +8,15 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-import cv2
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import calibration as calib
 from ..config import Calibration, ProjectConfig
-from ..timing import check_timing, probe
+from ..timing import check_timing
 from .jobs import JobManager
 from .projects import OUTPUT_FILES, ProjectStore
 
@@ -31,16 +30,24 @@ class CreateProject(BaseModel):
 
 
 def create_app(data_dir: Path) -> FastAPI:
-    jobs = JobManager()
+    store = ProjectStore(data_dir)
+    store.db.mark_interrupted()
+
+    def on_job_change(job) -> None:
+        store.db.record_job(job.public())
+        if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render"):
+            store.refresh(job.project_id)
+
+    jobs = JobManager(on_change=on_job_change)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
         await asyncio.to_thread(jobs.shutdown)
+        store.db.close()
 
     app = FastAPI(title="speedcam", lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=4096)
-    store = ProjectStore(data_dir)
     app.state.store, app.state.jobs = store, jobs
 
     def _dir(pid: str) -> Path:
@@ -54,6 +61,7 @@ def create_app(data_dir: Path) -> FastAPI:
         data = store.load(pid)
         cfg = ProjectConfig.model_validate(data["config"])
         data["status"] = store.status(pid)
+        data["source_exists"] = Path(cfg.source).is_file()
         data["jobs"] = [j.public() for j in jobs.active_for(pid)]
         info = probe_cached(data)
         data["timing_warnings"] = check_timing(info, cfg.capture_fps, cfg.real_duration_s) if cfg.capture_fps else []
@@ -112,6 +120,43 @@ def create_app(data_dir: Path) -> FastAPI:
     def get_project(pid: str):
         return _project(pid)
 
+    @app.post("/api/projects/{pid}/opened")
+    def project_opened(pid: str, body: Optional[dict[str, Any]] = Body(None)):
+        """Remember when a project was last opened and on which screen (to resume there)."""
+        _dir(pid)
+        store.touch(pid, (body or {}).get("screen"))
+        return {"ok": True}
+
+    @app.post("/api/projects/{pid}/relink")
+    def relink(pid: str, body: dict[str, Any] = Body(...)):
+        _dir(pid)
+        try:
+            warnings = store.relink(pid, str(body.get("source", "")))
+        except FileNotFoundError as e:
+            raise HTTPException(400, f"file not found: {e}")
+        return {**_project(pid), "relink_warnings": warnings}
+
+    @app.delete("/api/projects/{pid}")
+    def delete_project(pid: str):
+        _dir(pid)
+        if jobs.active_for(pid):
+            raise HTTPException(409, "a job is running for this project; cancel it first")
+        store.delete(pid)
+        return {"deleted": pid}
+
+    @app.get("/api/projects/{pid}/thumb.jpg")
+    def thumbnail(pid: str):
+        _dir(pid)
+        try:
+            return FileResponse(store.thumbnail(pid), media_type="image/jpeg", headers={"Cache-Control": "max-age=300"})
+        except (IndexError, EOFError, OSError, ValueError) as e:  # missing source etc.
+            raise HTTPException(404, f"no thumbnail: {e}")
+
+    @app.get("/api/projects/{pid}/jobs")
+    def project_jobs(pid: str):
+        _dir(pid)
+        return store.db.jobs_for(pid)
+
     @app.patch("/api/projects/{pid}")
     def patch_project(pid: str, body: dict[str, Any] = Body(...)):
         _dir(pid)
@@ -128,8 +173,9 @@ def create_app(data_dir: Path) -> FastAPI:
             cfg = ProjectConfig.model_validate(merged)
         except ValueError as e:
             raise HTTPException(422, str(e))
-        extra = {"name": body["name"]} if "name" in body else {}
-        store.save_config(pid, cfg, **extra)
+        store.save_config(pid, cfg)
+        if "name" in body:
+            store.rename(pid, str(body["name"]))
         return _project(pid)
 
     @app.post("/api/projects/{pid}/proxy")
@@ -140,17 +186,11 @@ def create_app(data_dir: Path) -> FastAPI:
     def get_frame(pid: str, n: int, fmt: str = "jpg", max_width: Optional[int] = None):
         _dir(pid)
         try:
-            img = store.grabber(pid).get(n)
+            f = store.frame_file(pid, n, fmt, max_width)
         except (IndexError, EOFError):
             raise HTTPException(404, f"frame {n} not available")
-        if max_width and img.shape[1] > max_width:
-            k = max_width / img.shape[1]
-            img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
-        if fmt == "png":
-            buf = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 1])[1]
-            return Response(buf.tobytes(), media_type="image/png")
-        buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1]
-        return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+        return FileResponse(f, media_type="image/png" if fmt == "png" else "image/jpeg",
+                            headers={"Cache-Control": "max-age=3600"})
 
     @app.get("/api/projects/{pid}/proxy.mp4")
     def get_proxy(pid: str):
@@ -207,6 +247,7 @@ def create_app(data_dir: Path) -> FastAPI:
         from ..pipeline import recompute as _recompute
 
         _recompute(store.config(pid), d)
+        store.refresh(pid)
         return get_results(pid)
 
     @app.get("/api/projects/{pid}/results")
@@ -225,9 +266,7 @@ def create_app(data_dir: Path) -> FastAPI:
         d = _dir(pid)
         if not (d / "tracks.parquet").exists():
             raise HTTPException(404, "run analysis first")
-        from ..render import overlay_data
-
-        return overlay_data(store.config(pid), d)
+        return store.overlay(pid)
 
     @app.post("/api/projects/{pid}/render")
     def start_render(pid: str, body: Optional[dict[str, Any]] = Body(None)):

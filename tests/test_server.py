@@ -66,3 +66,68 @@ def test_full_api_flow(tmp_path):
     assert client.get(f"/api/projects/{pid}/results").json()["render"]["output_fps"] == 30
     assert client.get(f"/api/projects/{pid}/files/results.csv").status_code == 200
     assert client.get(f"/api/projects/{pid}/files/../project.json").status_code == 404
+
+
+@pytest.mark.slow
+def test_library_cache_and_history(tmp_path):
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=60.0, size=(640, 360), m_per_px=0.1)
+    data_dir = tmp_path / "projects"
+    client = TestClient(create_app(data_dir))
+    p = client.post("/api/projects", json={"source": cfg.source}).json()
+    pid = p["id"]
+    assert _wait(client, p["proxy_job"])["status"] == "done"
+
+    # library row reflects folder state; opening records the screen to resume on
+    lib = client.get("/api/projects").json()
+    assert lib[0]["id"] == pid and lib[0]["has_proxy"] == 1 and lib[0]["source_exists"]
+    client.post(f"/api/projects/{pid}/opened", json={"screen": "calibrate"})
+    assert client.get("/api/projects").json()[0]["last_screen"] == "calibrate"
+
+    # frames and thumbnails are served from the disk cache after the first decode
+    assert client.get(f"/api/projects/{pid}/frame/5").status_code == 200
+    assert (data_dir / pid / "cache" / "frames" / "5_full.jpg").exists()
+    assert client.get(f"/api/projects/{pid}/thumb.jpg").headers["content-type"] == "image/jpeg"
+
+    client.patch(f"/api/projects/{pid}", json={"capture_fps": 120, "name": "Renamed", "detection": {"type": "blob"},
+                                               "stabilization": {"enabled": True}})
+    client.put(f"/api/projects/{pid}/calibration", json=cfg.calibration.model_dump(mode="json"))
+    end = _wait(client, client.post(f"/api/projects/{pid}/analyze").json()["id"])
+    assert end["status"] == "done"
+    row = client.get("/api/projects").json()[0]
+    assert row["name"] == "Renamed" and row["n_valid"] == 1 and row["mean_kmh"] == pytest.approx(60, rel=0.01)
+    drift = client.get(f"/api/projects/{pid}/results").json()["run"]["camera_drift"]
+    assert drift["max_px"] > 0.5  # the synthetic clip sways
+
+    # overlay is cached until its inputs change
+    client.get(f"/api/projects/{pid}/overlay")
+    assert (data_dir / pid / "cache" / "overlay.json").exists()
+
+    # job history survives a restart, on a new app instance over the same folder
+    client2 = TestClient(create_app(data_dir))
+    kinds = [j["kind"] for j in client2.get(f"/api/projects/{pid}/jobs").json()]
+    assert "analyze" in kinds and "proxy" in kinds
+
+    # relink to a copy of the clip, then delete the project (the video stays)
+    import shutil
+
+    moved = tmp_path / "moved.mp4"
+    shutil.copy(cfg.source, moved)
+    r = client2.post(f"/api/projects/{pid}/relink", json={"source": str(moved)}).json()
+    assert r["relink_warnings"] == [] and r["config"]["source"] == str(moved.resolve())
+    assert client2.delete(f"/api/projects/{pid}").status_code == 200
+    assert not (data_dir / pid).exists() and moved.exists()
+    assert client2.get("/api/projects").json() == []
+
+
+def test_index_rebuilds_from_folders(tmp_path):
+    """Deleting speedcam.db loses nothing but job history: the library is rebuilt from project folders."""
+    from speedcam.server.projects import ProjectStore
+
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=40.0, size=(320, 180), m_per_px=0.2)
+    store = ProjectStore(tmp_path / "projects")
+    pid = store.create(cfg.source)["id"]
+    store.db.close()
+    for f in (tmp_path / "projects").glob("speedcam.db*"):
+        f.unlink()
+    store2 = ProjectStore(tmp_path / "projects")
+    assert [r["id"] for r in store2.list()] == [pid]

@@ -141,6 +141,10 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     last_preview = 0.0
     done = 0
     n_dets = 0
+    # how far the camera moves relative to the reference frame (frame centre, px):
+    # tells whether stabilization can be skipped for this footage
+    centre = np.array([[info.width / 2, info.height / 2]])
+    drift: list[float] = []
     trails: dict[int, list] = {}
     trail_len = int(round(fps))  # 1 s of history
     seen_tracks: set[int] = set()
@@ -156,6 +160,8 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
                              f"reusing previous transform ({stab.n_fallback} so far)", "warning")
         else:
             T = np.eye(3)
+        if stab:
+            drift.append(float(np.linalg.norm(transform_points(T, centre) - centre)))
         T_frames.append(i)
         T_all.append(T)
 
@@ -230,6 +236,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     summary = write_results(out, cfg, results, info, fps, cal, timing_msgs, {
         "frames": done, "registration_failures": n_fail,
         "detections_per_frame": n_dets / max(done, 1), **track_diagnostics(df, renders),
+        "camera_drift": camera_drift(drift, cal.m_per_px),
         "pts_anomalies": len(pts_anomalies), "elapsed_s": time.monotonic() - t_start,
     })
     reporter.progress("done", 1, 1)
@@ -276,6 +283,15 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
     run = {**prev.get("run", {}), **track_diagnostics(df, renders)}
     return write_results(out, cfg, results, info, fps, cal, check_timing(info, fps, cfg.real_duration_s), run)
+
+
+def camera_drift(drift_px: list[float], m_per_px: float) -> Optional[dict]:
+    """Camera motion relative to the reference frame; None when stabilization was off."""
+    if not drift_px:
+        return None
+    a = np.asarray(drift_px)
+    return {"max_px": float(a.max()), "p95_px": float(np.percentile(a, 95)),
+            "max_m": float(a.max() * m_per_px), "frames": len(a)}
 
 
 def track_diagnostics(df: pd.DataFrame, renders: dict) -> dict:

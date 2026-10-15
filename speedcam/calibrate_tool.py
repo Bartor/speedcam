@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from . import calibration
-from .config import Calibration, ProjectConfig, Segment
+from .config import ProjectConfig, Segment
 from .video import FrameGrabber
 
 WIN = "speedcam calibrate"

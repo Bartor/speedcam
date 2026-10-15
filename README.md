@@ -28,6 +28,14 @@ footage it finds almost nothing.
 speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam-projects
 ```
 
+0. **Projects:** the start page lists every project in the data folder with a
+   thumbnail, its status and headline stats (valid/measured, mean, p85). Click a
+   project to resume on the screen you left it. Projects can be renamed, deleted
+   (the source video is never touched), or relinked when the video has moved. The
+   index and job history live in `~/speedcam-projects/speedcam.db` (SQLite). The
+   project folders are the source of truth, so deleting the database only loses
+   job history. Decoded full-res frames, thumbnails and overlay data are cached
+   under each project's `cache/` folder.
 1. **Import:** pick a video on disk. Nothing is uploaded. The server builds a 1080p
    H.264 proxy for scrubbing. Confirm `capture_fps`. **DJI slow-motion clips** are
    stored at e.g. 30 fps, but were captured at 100/120 fps. Real time is always
@@ -45,7 +53,10 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    more than 5%, the calibration is refused, because the model doesn't fit the view. Draw lines A and B, plus an optional ROI. Scale,
    residuals and the A–B gap update live. All clicks are made on full-resolution
    stills decoded from the original.
-3. **Process:** **Preview tracking** runs detection, stabilization and tracking on a
+3. **Process:** choose **Camera: Hovering** (stabilize every frame) or **Still**
+   (skip stabilization, faster). A preview run with stabilization on measures camera
+   drift against the reference frame, in px and in cm on the ground, and says whether
+   skipping is safe. **Preview tracking** runs detection, stabilization and tracking on a
    few seconds and streams annotated frames: boxes coloured by track ID, trails and
    lines A/B. It also reports how many tracks crossed each line. Use it to check
    settings before the full run, which streams the same tracking preview and can be

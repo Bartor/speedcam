@@ -6,7 +6,7 @@ Audit: sub-frame line-crossing times, speed = chord between crossings / Δt.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np

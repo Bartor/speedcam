@@ -1,0 +1,25 @@
+/* Project library (Import screen). Uses the design tokens from styles.css. */
+.import-page { align-items: flex-start; }
+.import-page .library { flex: 1; min-width: 0; }
+.import-page .new-project { width: 440px; }
+.lib-search { width: 240px; }
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.lib-card {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  cursor: pointer; display: flex; flex-direction: column;
+}
+.lib-card:hover, .lib-card:focus-visible { border-color: var(--accent); outline: none; }
+.lib-thumb { position: relative; aspect-ratio: 16 / 9; background: #0b0b0b; display: flex; align-items: center; justify-content: center; }
+.lib-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lib-badge { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, .75); color: var(--text); font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+.lib-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lib-title { font-weight: 600; }
+.lib-meta { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.lib-foot { margin: 4px 0 0; }
+.title-input { font-size: 18px; font-weight: 600; width: 100%; background: transparent; border-color: transparent; padding: 2px 4px; margin-bottom: 6px; }
+.title-input:hover, .title-input:focus { border-color: var(--border); background: var(--bg); }
+.job-history { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 240px; overflow: auto; }
+.job-history li { display: flex; gap: 6px; padding: 3px 0; border-bottom: 1px solid var(--grid); }
+@media (max-width: 1100px) { .import-page .new-project { width: 100%; } }
+/* Process screen: camera mode (kept here to stay out of styles.css while it is being redesigned) */
+.camera-mode { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
