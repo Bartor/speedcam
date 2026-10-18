@@ -60,7 +60,12 @@ class Calibration(BaseModel):
 class DetectionSettings(BaseModel):
     type: Literal["yolo", "blob"] = "yolo"
     # COCO model handles oblique and nadir views; yolo11*-obb.pt (DOTA) only suits true top-down footage.
-    model: str = "yolo11x.pt"
+    # "auto" runs a COCO model (good for oblique views) and a DOTA oriented-box model (good for
+    # straight-down views); see AutoDetector. Or name one Ultralytics model, e.g. "yolo11x.pt".
+    model: str = "auto"
+    auto_models: tuple[str, str] = ("yolo11x.pt", "yolo11x-obb.pt")
+    obb_imgsz: int = 1024  # DOTA models are trained at 1024; larger sizes detected far less here
+    auto_sample_frames: int = 12  # frames sampled across the clip to pick the primary model
     conf: float = 0.25
     iou: float = 0.5
     imgsz: int = 1280

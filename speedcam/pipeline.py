@@ -173,6 +173,17 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 
     reporter.progress("loading model", 0, 1)
     detector = make_detector(cfg.detection)
+    detector_info = None
+    if hasattr(detector, "choose_primary"):
+        # pick the model that suits this clip's camera angle, from frames spread across it
+        n_s = max(1, cfg.detection.auto_sample_frames)
+        lo, hi = max(0, cfg.start_frame), min(cfg.end_frame or info.nb_frames, info.nb_frames) - 1
+        g = FrameGrabber(cfg.source)
+        sample = [g.get(int(f)) for f in np.linspace(lo, max(lo, hi), n_s).round()]
+        g.close()
+        detector_info = detector.choose_primary(sample)
+        reporter.log(f"Auto detector: primary {detector_info['primary']} "
+                     f"(vehicles x confidence per frame: {detector_info['scores']})")
 
     ref_idx = cfg.calibration.reference_frame
     grabber = FrameGrabber(cfg.source)
@@ -319,6 +330,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         "frames": done, "registration_failures": n_fail,
         "detections_per_frame": n_dets / max(done, 1), **track_diagnostics(df, renders),
         "camera_drift": camera_drift(drift, cal.m_per_px),
+        "detector": detector_info,
         "pts_anomalies": len(pts_anomalies), "elapsed_s": time.monotonic() - t_start,
     })
     reporter.progress("done", 1, 1)

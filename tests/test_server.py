@@ -35,7 +35,7 @@ def test_full_api_flow(tmp_path):
 
     p = client.patch(f"/api/projects/{pid}", json={"capture_fps": 120, "detection": {"type": "blob"}}).json()
     assert p["config"]["capture_fps"] == 120
-    assert p["config"]["detection"]["model"] == "yolo11x.pt"  # partial update keeps other fields
+    assert p["config"]["detection"]["model"] == "auto"  # partial update keeps other fields
 
     cal = client.put(f"/api/projects/{pid}/calibration", json=cfg.calibration.model_dump(mode="json")).json()
     assert cal["result"]["line_gap_m"] == pytest.approx(24.0)

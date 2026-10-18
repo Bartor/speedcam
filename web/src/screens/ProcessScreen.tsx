@@ -8,7 +8,7 @@ interface Props { project: Project; onChanged: (p: Project) => void; onDone: () 
 type Field = { section: string; key: string; label: string; type: "num" | "text" | "bool" | "select"; options?: string[]; hint?: string };
 
 const FIELDS: Field[] = [
-  { section: "detection", key: "model", label: "YOLO model", type: "text", hint: "yolo11x.pt (COCO, any view angle) or yolo11x-obb.pt (DOTA, true top-down only)" },
+  { section: "detection", key: "model", label: "YOLO model", type: "text", hint: "auto = both below, picks the better one per clip and fills in what it misses (any angle, ~2x GPU time) · yolo11x.pt = COCO, oblique views · yolo11x-obb.pt = DOTA, straight down" },
   { section: "detection", key: "conf", label: "Confidence", type: "num" },
   { section: "detection", key: "imgsz", label: "Inference size", type: "num" },
   { section: "detection", key: "half", label: "Fast mode (FP16)", type: "bool", hint: "~45% faster, but results aren't identical on reruns and speeds can shift by ~0.2 km/h. Off = FP32, repeatable." },
@@ -141,9 +141,10 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
         <h3>Settings</h3>
         <div className="row wrap small">
           <span className="muted">Model:</span>
-          {["yolo11x.pt", "yolo11l.pt", "yolo11m.pt", "yolo11x-obb.pt"].map((m) => (
+          {["auto", "yolo11x.pt", "yolo11x-obb.pt", "yolo11m.pt"].map((m) => (
             <button key={m} className={`chip ${cfg.detection.model === m ? "active" : ""}`}
-              onClick={() => setField(FIELDS[0], m)}>{m}</button>
+              title={m === "auto" ? "COCO + top-down model; works at any camera angle" : undefined}
+              onClick={() => setField(FIELDS[0], m)}>{m === "auto" ? "Auto (any angle)" : m}</button>
           ))}
         </div>
         <div className="form-grid compact">

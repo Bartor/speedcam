@@ -37,9 +37,17 @@ cd web && npm install && npm run build   # builds the UI into speedcam/server/st
 ```
 
 Ultralytics downloads the YOLO weights the first time they are used. The default
-is `yolo11x.pt`, the full COCO model, which works on both oblique and top-down views.
-`yolo11x-obb.pt` (DOTA, oriented boxes) only suits true top-down footage: on oblique
-footage it finds almost nothing.
+detector is **Auto**, which works at any camera angle. It loads COCO `yolo11x.pt`
+(strong on oblique views) and DOTA `yolo11x-obb.pt` (strong straight down). For each
+clip it samples 12 frames, and the model that finds more vehicles becomes the
+primary. On every frame the primary's boxes are kept, and the other model only adds
+vehicles the primary missed, so each vehicle keeps a consistent box. It costs about
+twice the GPU time of one model. Measured: on a straight-down clip, COCO finds 1.5
+detections per frame, top-down 3.4 and Auto 3.6; on an oblique clip, 15.4 / 6.4 /
+16.6. Either model can still be chosen on its own on the Process screen.
+
+Boxes and labels in the overlay and the render stay steady through detector gaps
+of up to 1 s: missed frames are interpolated from the detections on either side.
 
 ## Web app
 
@@ -130,7 +138,7 @@ speedcam synth --speed 50                     # synthetic validation clip + conf
 | Timing | `frame / capture_fps`. Container PTS is checked for gaps; sidecar DJI `.SRT` `DiffTime` is used to suggest the capture rate. |
 | Calibration | Polygon: shape solved from sides + diagonals, then homography. Segments only: uniform scale (warns when all segments are parallel). 2–3 control points: similarity. ≥4: homography. Every segment is reported as a check residual. |
 | Stabilization | Reference corners are tracked into each frame with pyramidal Lucas–Kanade, then fitted with RANSAC (similarity by default). Vehicles are masked. Falls back to ORB vs. reference, then ORB vs. the previous frame (chained), then the last transform (logged). Frames are never warped for analysis. |
-| Detection | Ultralytics YOLO, OBB or axis-aligned, with optional tiling and NMS across tiles. DOTA `small/large vehicle` map to car/truck. |
+| Detection | Ultralytics YOLO: Auto (COCO + DOTA-OBB, a primary per clip plus fill-in) or a single model, oriented or axis-aligned boxes, optional tiling with NMS across tiles. DOTA `small/large vehicle` map to car/truck. |
 | Tracking | ByteTrack (supervision) on reference-frame boxes. |
 | Speed | Savitzky–Golay smoothing of the world trajectory. **Momentary:** |velocity| from a local quadratic fit over 0.5 s (`speed.momentary_window_s`; measured noise about ±0.4 km/h on 4K footage, ±0.8 at 0.25 s), giving max/min, where the max happened, and a profile. **Average:** linear regression of arc length vs. time between the sub-frame crossings of A and B. **Audit:** chord / Δt. Flags: `disagree` (>2%), `accel` (>8 m/s²), `residual` (jumps ⇒ ID switch), `gap`, `multi_cross`. |
 | Stats | t-interval for the mean, bootstrap CIs for p85/p95, ITE `n = (S·K/E)²·(2+U²)/2`. |

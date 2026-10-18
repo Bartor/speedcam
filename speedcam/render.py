@@ -332,6 +332,33 @@ class Panel:
 
 
 # -- per-frame overlay ------------------------------------------------------------------------
+CORNER_COLS = [f"c{k}{a}" for k in range(4) for a in "xy"]
+
+
+def filled_boxes(tracks: pd.DataFrame, max_gap_frames: int) -> pd.DataFrame:
+    """Track boxes on every frame of each track: frames where the detector missed a vehicle
+    (up to `max_gap_frames` in a row) get corners interpolated from the detections either side.
+    Without this, boxes and labels blink whenever detection confidence dips below the threshold."""
+    parts = []
+    for tid, g in tracks.groupby("track_id"):
+        g = g.sort_values("frame").drop_duplicates("frame")
+        f = g["frame"].to_numpy()
+        if len(f) < 2:
+            parts.append(g[["frame", "track_id", *CORNER_COLS]])
+            continue
+        full = np.arange(f[0], f[-1] + 1)
+        nxt = np.searchsorted(f, full)  # index of the detection at or after each frame
+        prev_f = f[np.maximum(nxt - 1, 0)]
+        next_f = f[np.minimum(nxt, len(f) - 1)]
+        keep = (np.isin(full, f)) | (next_f - prev_f <= max_gap_frames + 1)
+        full = full[keep]
+        C = g[CORNER_COLS].to_numpy(float)
+        cols = {c: np.interp(full, f, C[:, k]) for k, c in enumerate(CORNER_COLS)}
+        parts.append(pd.DataFrame({"frame": full, "track_id": tid, **cols}))
+    if not parts:
+        return pd.DataFrame(columns=["frame", "track_id", *CORNER_COLS])
+    return pd.concat(parts, ignore_index=True)
+
 class Overlay:
     def __init__(self, cfg: ProjectConfig, fps: float, cal, renders: dict[int, TrackRender],
                  tracks: pd.DataFrame, transforms: dict, size: tuple[int, int], src_size: tuple[int, int],
@@ -347,9 +374,9 @@ class Overlay:
         self.typo = typo or Typography(self.rs.font)
         self.pills = Pills(self.typo, self.k)
         self.T_frames, self.T = transforms["frames"], transforms["T"]
-        corner_cols = [f"c{k}{a}" for k in range(4) for a in "xy"]
-        self.by_frame = {int(f): (g["track_id"].to_numpy(), g[corner_cols].to_numpy().reshape(-1, 4, 2))
-                         for f, g in tracks.groupby("frame")}
+        boxes = filled_boxes(tracks, int(round(cfg.tracking.lost_buffer_s * fps)))
+        self.by_frame = {int(f): (g["track_id"].to_numpy(), g[CORNER_COLS].to_numpy().reshape(-1, 4, 2))
+                         for f, g in boxes.groupby("frame")}
         self.trail_frames = int(round(self.rs.trail_s * fps))
         self.trail_px = {tid: calibration.apply_h(self.H_inv, r.world) for tid, r in renders.items()}
         # where the traffic is (reference px), to put line tags on the kerb side, off the lanes
@@ -525,7 +552,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     tf = np.load(out / "transforms.npz")
     T_inv = np.linalg.inv(tf["T"]) if len(tf["T"]) else np.zeros((0, 3, 3))
     H_inv = np.linalg.inv(cal.H)
-    corner_cols = [f"c{k}{a}" for k in range(4) for a in "xy"]
+    boxes = filled_boxes(tracks, int(round(cfg.tracking.lost_buffer_s * fps)))
 
     def r1(a) -> list:
         return np.round(np.asarray(a, float), 1).ravel().tolist()
@@ -551,7 +578,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
         "line_gap_m": cal.line_gap_m, "speed_limit_kmh": cfg.render.speed_limit_kmh,
         "trail_frames": int(round(cfg.render.trail_s * fps)),
         "T_frames": tf["frames"].tolist(), "T_inv": np.round(T_inv.reshape(-1, 9), 7).tolist(),
-        "det_frame": tracks["frame"].astype(int).tolist(), "det_tid": tracks["track_id"].astype(int).tolist(),
-        "det_corners": r1(tracks[corner_cols].to_numpy()),
+        "det_frame": boxes["frame"].astype(int).tolist(), "det_tid": boxes["track_id"].astype(int).tolist(),
+        "det_corners": r1(boxes[CORNER_COLS].to_numpy()),
         "tracks": track_info,
     }

@@ -5,6 +5,7 @@ A simple colour-blob detector is included for synthetic validation clips.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -172,5 +173,77 @@ class BlobDetector:
         return [self(f) for f in frames]
 
 
+def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """IoU of axis-aligned boxes (n,4) x (m,4)."""
+    if len(a) == 0 or len(b) == 0:
+        return np.zeros((len(a), len(b)))
+    x0 = np.maximum(a[:, None, 0], b[None, :, 0])
+    y0 = np.maximum(a[:, None, 1], b[None, :, 1])
+    x1 = np.minimum(a[:, None, 2], b[None, :, 2])
+    y1 = np.minimum(a[:, None, 3], b[None, :, 3])
+    inter = np.clip(x1 - x0, 0, None) * np.clip(y1 - y0, 0, None)
+    area_a = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1])
+    area_b = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    return inter / np.maximum(area_a[:, None] + area_b[None, :] - inter, 1e-9)
+
+
+def _concat(a: Detections, b: Detections) -> Detections:
+    if len(b) == 0:
+        return a
+    if len(a) == 0:
+        return b
+    return Detections(np.concatenate([a.corners, b.corners]), np.concatenate([a.conf, b.conf]),
+                      np.concatenate([a.cls, b.cls]))
+
+
+class AutoDetector:
+    """Two detectors for any camera angle: a COCO model (strong on oblique views) and a DOTA
+    oriented-box model (strong straight down).
+
+    Per clip, the one that finds more vehicles on sampled frames becomes the primary. On every
+    frame the primary's boxes are kept and the secondary only adds vehicles the primary missed,
+    so each vehicle keeps boxes from one model and its centre doesn't jump between box styles.
+    """
+
+    OVERLAP = 0.3  # secondary boxes overlapping a primary box this much are the same vehicle
+
+    def __init__(self, s: DetectionSettings, detectors: Optional[list] = None, names: Optional[list] = None):
+        self.s = s
+        if detectors is None:
+            coco, obb = s.auto_models
+            detectors = [YoloDetector(s.model_copy(update={"model": coco})),
+                         YoloDetector(s.model_copy(update={"model": obb, "imgsz": s.obb_imgsz}))]
+            names = [coco, obb]
+        self.detectors = detectors
+        self.names = names or [f"model{k}" for k in range(len(detectors))]
+        self.primary = 0
+        self.scores: Optional[list[float]] = None
+
+    def choose_primary(self, frames: list[np.ndarray]) -> dict:
+        """Score each model on sample frames (sum of confidences ~ vehicles found x certainty)."""
+        self.scores = [float(sum(d.conf.sum() for d in det.detect_batch(frames))) for det in self.detectors]
+        self.primary = int(np.argmax(self.scores))
+        return {"primary": self.names[self.primary],
+                "scores": {n: round(sc / max(len(frames), 1), 2) for n, sc in zip(self.names, self.scores)}}
+
+    def merge(self, primary: Detections, secondary: Detections) -> Detections:
+        if len(secondary) == 0 or len(primary) == 0:
+            return _concat(primary, secondary)
+        ov = _iou_matrix(secondary.xyxy, primary.xyxy).max(axis=1)
+        return _concat(primary, secondary.subset(ov < self.OVERLAP))
+
+    def __call__(self, frame: np.ndarray) -> Detections:
+        return self.detect_batch([frame])[0]
+
+    def detect_batch(self, frames: list[np.ndarray]) -> list[Detections]:
+        prim = self.detectors[self.primary].detect_batch(frames)
+        sec = self.detectors[1 - self.primary].detect_batch(frames)
+        return [self.merge(p, q) for p, q in zip(prim, sec)]
+
+
 def make_detector(s: DetectionSettings):
-    return BlobDetector(s) if s.type == "blob" else YoloDetector(s)
+    if s.type == "blob":
+        return BlobDetector(s)
+    if s.model == "auto":
+        return AutoDetector(s)
+    return YoloDetector(s)

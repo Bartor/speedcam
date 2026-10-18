@@ -301,3 +301,49 @@ def test_stabilizer_recovers_similarity(features, tol):
     pts = np.array([[100.0, 100.0], [1100.0, 650.0], [640.0, 360.0]])
     err = np.linalg.norm(transform_points(reg.T, pts) - transform_points(T_true, pts), axis=1)
     assert err.max() < tol
+
+
+# ---------------------------------------------------------------- auto detector (fake models, no GPU)
+def _box(x, y, w=40, h=20, conf=0.9, cls=0):
+    from speedcam.detection import Detections
+
+    c = np.array([[[x, y], [x + w, y], [x + w, y + h], [x, y + h]]], float)
+    return Detections(c, np.array([conf]), np.array([cls]))
+
+
+class _FakeDet:
+    def __init__(self, per_frame):
+        self.per_frame = per_frame  # list of Detections, returned for every frame
+
+    def detect_batch(self, frames):
+        from functools import reduce
+
+        from speedcam.detection import Detections, _concat
+
+        return [reduce(_concat, self.per_frame, Detections.empty()) for _ in frames]
+
+
+def test_auto_detector_picks_model_that_sees_more():
+    from speedcam.config import DetectionSettings
+    from speedcam.detection import AutoDetector
+
+    coco = _FakeDet([_box(0, 0, conf=0.3)])  # oblique-trained model, weak on this clip
+    obb = _FakeDet([_box(0, 0, conf=0.6), _box(200, 0, conf=0.6), _box(400, 0, conf=0.6)])
+    auto = AutoDetector(DetectionSettings(), [coco, obb], ["coco", "obb"])
+    info = auto.choose_primary([np.zeros((10, 10, 3))] * 4)
+    assert info["primary"] == "obb" and auto.primary == 1
+
+
+def test_auto_detector_secondary_only_adds_missed_vehicles():
+    from speedcam.config import DetectionSettings
+    from speedcam.detection import AutoDetector
+
+    primary = _FakeDet([_box(0, 0), _box(200, 0)])
+    # same two vehicles with slightly different boxes, plus one the primary missed
+    secondary = _FakeDet([_box(3, 2, w=44), _box(198, 1), _box(600, 0, conf=0.5, cls=1)])
+    auto = AutoDetector(DetectionSettings(), [primary, secondary], ["p", "s"])
+    out = auto.detect_batch([np.zeros((10, 10, 3))])[0]
+    assert len(out) == 3
+    # the shared vehicles keep the primary's boxes exactly (no centre jumping between models)
+    np.testing.assert_allclose(out.corners[:2], np.concatenate([_box(0, 0).corners, _box(200, 0).corners]))
+    assert out.cls[2] == 1

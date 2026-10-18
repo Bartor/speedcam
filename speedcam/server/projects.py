@@ -27,6 +27,7 @@ OUTPUT_FILES = {"proxy.mp4", "render.mp4", "results.csv", "results.json", "track
                 "stabilization.csv", "render.json"}
 SCREENS = {"import", "calibrate", "process", "results"}
 FRAME_CACHE_MAX = 400  # decoded full-res frames kept on disk per project
+OVERLAY_VERSION = 2  # bump when overlay_data() output changes, so cached copies are rebuilt
 
 
 class ProjectStore:
@@ -249,6 +250,7 @@ class ProjectStore:
         d = self.dir(pid)
         cfg = self.config(pid)
         key_src = json.dumps({
+            "v": OVERLAY_VERSION,
             "tracks": (d / "tracks.parquet").stat().st_mtime,
             "cal": cfg.calibration.model_dump(mode="json"), "speed": cfg.speed.model_dump(mode="json"),
             "fps": cfg.capture_fps, "limit": cfg.render.speed_limit_kmh, "trail": cfg.render.trail_s,
