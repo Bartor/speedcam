@@ -71,6 +71,40 @@ export interface Vehicle {
   speed_max_kmh: number; speed_min_kmh: number; speed_sigma_kmh: number | null; t_max_s: number | null;
   d_max_m: number | null; speed_trend_pct: number | null;
   profile: { t: number[]; d: number[]; v: number[] } | null;
+  // margin of error (k=2, ~95 %); *_u_lower adds the one-sided uncorrected parallax bias below the value
+  speed_avg_se_kmh?: number | null;
+  speed_max_u_kmh?: number; speed_max_u_lower_kmh?: number; speed_avg_u_kmh?: number; speed_avg_u_lower_kmh?: number;
+  u_pct?: number; u_cal_pct?: number; u_parallax_pct?: number | null; u_over_target?: boolean;
+  uncertainty?: Record<"max" | "avg", { calibration: number; noise: number; parallax_bias: number }>;
+}
+
+export interface UncertaintySummary {
+  k: number; mc_samples: number; line_gap_rel_pct: number | null; fit_ratio: number | null; fit_dof: number;
+  fit_inflation: number; parallax: "bounded" | "unknown"; target_pct: number; n_over_target: number;
+  median_u_pct: number | null;
+  settings: { distance_tolerance_m: number; click_tolerance_px: number; drone_height_m: number | null; target_pct: number };
+}
+
+export interface Reference {
+  speed_kmh: number; t_s?: number | null; track_id?: number | null; direction?: "A->B" | "B->A" | null;
+  metric: "avg" | "max"; tolerance_kmh: number; source: string; note: string;
+}
+
+export interface ValidationRow {
+  index: number; track_id: number | null; note: string; measured_kmh?: number; error_kmh?: number; error_pct?: number;
+  valid?: boolean; u_kmh?: number; u_lower_kmh?: number; bound_low_kmh?: number; bound_high_kmh?: number; inside?: boolean;
+}
+
+export interface Validation {
+  references: Reference[]; updated: number;
+  report: {
+    rows: ValidationRow[];
+    summary: {
+      n_references: number; n_matched: number; expected_coverage: number; verdict: string; message: string;
+      bias_kmh?: number; bias_pct?: number; sd_kmh?: number; sd_pct?: number; rms_pct?: number; max_abs_pct?: number;
+      n_inside?: number; n_with_margin?: number; coverage?: number; z_rms?: number; p_coverage?: number;
+    };
+  };
 }
 
 export interface Stats {
@@ -83,6 +117,7 @@ export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
   stats_max?: Stats; by_direction_max?: Record<string, Stats>;
+  uncertainty?: UncertaintySummary | null;
   calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
   run: Record<string, any>; calibration: CalibrationResult;
   render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string } | null;
@@ -126,6 +161,9 @@ export const api = {
   render: (id: string, settings: Record<string, unknown>) => req<Job>("POST", `/api/projects/${id}/render`, settings),
   overlay: (id: string) => fetch(`/api/projects/${id}/overlay`).then((r) => (r.ok ? r.json() : null)),
   results: (id: string) => req<Results>("GET", `/api/projects/${id}/results`),
+  validation: (id: string) => req<Validation>("GET", `/api/projects/${id}/validation`),
+  putValidation: (id: string, references: Reference[]) =>
+    req<Validation>("PUT", `/api/projects/${id}/validation`, { references }),
   cancel: (jobId: string) => req<Job>("POST", `/api/jobs/${jobId}/cancel`),
   rebuildProxy: (id: string) => req<Job>("POST", `/api/projects/${id}/proxy`),
   frameUrl: (id: string, n: number) => `/api/projects/${id}/frame/${n}`,
@@ -237,6 +275,32 @@ export function timeAgo(t: number | null | undefined): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
   return new Date(t * 1000).toLocaleDateString();
+}
+
+/** "±1.1", or "+0.5 −1.4" when the uncorrected parallax bias widens the lower side. */
+export function margin(v: Vehicle, key: "max" | "avg"): string | null {
+  const u = v[`speed_${key}_u_kmh`], lo = v[`speed_${key}_u_lower_kmh`] ?? u;
+  if (u === undefined || u === null || lo === undefined) return null;
+  return lo - u < 0.05 ? `±${u.toFixed(1)}` : `+${u.toFixed(1)} −${lo.toFixed(1)}`;
+}
+
+/** Hover text: how the margin of error is made up. */
+export function marginBreakdown(v: Vehicle, key: "max" | "avg"): string {
+  const t = v.uncertainty?.[key];
+  if (!t) return "No margin of error in these results: press Recompute speeds.";
+  const val = key === "max" ? v.speed_max_kmh : v.speed_kmh;
+  const pct = (x: number) => `${x.toFixed(2)} km/h (${((100 * x) / val).toFixed(2)} %)`;
+  const lines = [
+    `${key === "max" ? "Max" : "Average A→B"} ${val.toFixed(1)} km/h, margin ${margin(v, key)} km/h (95 %, k=2)`,
+    `• calibration: ±${pct(t.calibration)}`,
+    `• ${key === "max" ? "momentary-speed noise" : "regression noise"}: ±${pct(t.noise)}`,
+    t.parallax_bias > 0
+      ? `• height parallax, not corrected: up to −${pct(t.parallax_bias)} (measured can only be too high)`
+      : "• height parallax: not corrected and not bounded (drone height unknown)",
+    "Terms are independent and combined root-sum-square.",
+  ];
+  if (v.u_over_target) lines.push(`Over the accuracy target: the margin is ${fmt(v.u_pct, 1)} % of the speed.`);
+  return lines.join("\n");
 }
 
 export const fmt = (v: number | null | undefined, d = 1) =>

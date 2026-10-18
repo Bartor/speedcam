@@ -144,7 +144,42 @@ speedcam synth --speed 50                     # synthetic validation clip + conf
 | Stats | t-interval for the mean, bootstrap CIs for p85/p95, ITE `n = (S·K/E)²·(2+U²)/2`. |
 
 Outputs in the project or `--out` folder: `tracks.parquet`, `transforms.npz`,
-`stabilization.csv`, `results.csv`, `results.json`, `render.mp4`, `render.json`.
+`stabilization.csv`, `results.csv`, `results.json`, `render.mp4`, `render.json`,
+`validation.json`.
+
+## How the margin of error is computed
+
+Every vehicle gets a declared margin, shown as `61.3 ±1.1 km/h` in the table, the
+speed profile and (optionally) the render panel. Hover a value for its breakdown.
+It is an expanded uncertainty at k = 2 (about 95 %): independent terms, each a
+standard uncertainty, combined root-sum-square and doubled.
+
+| Term | How it's computed | Typical size (k = 2) |
+| --- | --- | --- |
+| Calibration | Monte Carlo: the typed calibration distances (± *distance tolerance*, default 5 cm; tape ~2 cm, orthophoto ~10 cm) and every clicked calibration point (± 0.5 px) are randomly perturbed 200 times, and the mapping (scale, similarity, homography or polygon least squares) is refitted each time. The spread of each vehicle's path length over A→B (and over the 0.5 s around its max) is the relative speed uncertainty. | 0.2–1 %: 20 cm over 20 m is 1 % (1σ) |
+| Check-distance fit | Redundant distances give a Birge ratio √(χ²/dof) of their residuals against the declared tolerances. Above 1 (typos, non-flat ground, wrong model), the calibration term is widened by that factor. With no redundant distance the calibration is unchecked, and the UI says so. | ×1–several |
+| Noise, max | The momentary-speed noise σ (deviation from a much smoother curve). | 0.4–1 km/h |
+| Noise, average | Standard error of the arc-length regression slope, from the residuals of a constant-acceleration fit (real acceleration isn't noise). It's inflated for samples correlated over 0.5 s. | 0.2–0.5 km/h |
+| Height parallax | **Not corrected.** The tracked box centre sits h above the road (car ~0.8 m, bus ~1.5 m), so on the ground plane it moves H/(H−h) times faster than the vehicle. With the drone height H entered, this one-sided bias widens only the lower side: `61.3 +1.1 −1.9`. Without it, parallax isn't in the margin, and the UI says so. | +0.8 % car at 100 m, +3 % bus at 50 m |
+| Timing, stabilization | Not budgeted: frame timing from `capture_fps` and the stabilization residuals are far below the terms above. | < 0.1 % |
+
+Vehicles whose margin exceeds the target (default ±2 %) are flagged with ⚠. The
+inputs (distance tolerance, click precision, drone height, target) are set per
+project on the Results screen. **Apply & recompute** refreshes the margins
+without re-detecting. `results.csv` and `results.json` carry `speed_max_u_kmh`,
+`speed_avg_u_kmh`, the `*_u_lower_kmh` variants and the per-term breakdown.
+
+The margin is a model of the known error sources. It can't see what it doesn't
+model: a wrong `capture_fps`, a mis-measured distance beyond its tolerance, or
+lens distortion. **Only a field validation proves it.** On the Results screen,
+**Validation run** takes reference speeds, from a GPS logger's average over A→B
+or a cruise-control speed, for specific vehicles (by track number or by time in
+the clip). The app matches them to the measured vehicles and reports the bias,
+the spread, and how many reference speeds fall inside the declared margin
+(combined with the reference's own tolerance). About 95 % should. Fewer, with a
+binomial p < 0.05, means the margin is too small. The references and the report
+are stored per project in `validation.json`. Use 20+ runs at several speeds and
+in both directions.
 
 ## Tests
 
@@ -160,5 +195,7 @@ camera sway and per-frame position jitter. It stores the clip as 30 fps
 
 ## Not covered yet
 
-- A field test with GPS-logged runs, with a ±2% target. This needs real footage.
+- A field test with GPS-logged runs, with a ±2% target. The Validation run screen
+  is ready for it, but it needs real footage.
+- Height-parallax correction (it is only bounded, when the drone height is known).
 - Non-goals for v1: real-time processing, live feed, oblique angles, multi-drone fusion.

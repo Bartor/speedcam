@@ -46,6 +46,18 @@ def test_full_api_flow(tmp_path):
     res = client.get(f"/api/projects/{pid}/results").json()
     assert res["stats"]["n_valid"] == 1
     assert res["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)
+    veh = res["vehicles"][0]
+    assert 0 < veh["speed_avg_u_kmh"] < 0.05 * 70 and veh["speed_max_u_kmh"] > 0
+    assert res["uncertainty"]["mc_samples"] > 100 and res["uncertainty"]["parallax"] == "unknown"
+
+    # validation run: a reference speed per vehicle, stored with the project
+    assert client.get(f"/api/projects/{pid}/validation").json()["report"]["summary"]["n_matched"] == 0
+    val = client.put(f"/api/projects/{pid}/validation", json={"references": [
+        {"speed_kmh": 70.0, "t_s": (veh["t_entry_s"] + veh["t_exit_s"]) / 2, "source": "synthetic"}]}).json()
+    row = val["report"]["rows"][0]
+    assert row["track_id"] == veh["track_id"] and row["inside"]
+    assert client.get(f"/api/projects/{pid}/validation").json()["references"][0]["source"] == "synthetic"
+    assert client.get(f"/api/projects/{pid}/files/validation.json").status_code == 200
 
     ov = client.get(f"/api/projects/{pid}/overlay").json()
     assert len(ov["det_frame"]) == len(ov["det_tid"]) == len(ov["det_corners"]) // 8 > 0

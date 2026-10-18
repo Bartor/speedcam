@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fmt, Vehicle } from "../api";
+import { fmt, margin, marginBreakdown, Vehicle } from "../api";
 import "./speed-profile.css";
 
 interface Props { v: Vehicle; limit: number; tNow?: number }
@@ -52,12 +52,16 @@ export default function SpeedProfile({ v, limit, tNow }: Props) {
   return (
     <div className="sprof">
       <div className="sprof-head">
-        <div className="sprof-kpi">
+        <div className="sprof-kpi" title={marginBreakdown(v, "max")}>
           <span className="sprof-kpi-label">Max</span>
           <span className={`sprof-kpi-val ${above ? "bad-text" : ""}`}>{fmt(v.speed_max_kmh)}</span>
-          <span className="sprof-kpi-unit">km/h{sig ? ` ±${(2 * sig).toFixed(1)}` : ""}</span>
+          <span className="sprof-kpi-unit">km/h {margin(v, "max") ?? (sig ? `±${(2 * sig).toFixed(1)} noise` : "")}
+            {v.u_over_target && <span className="u-flag" aria-label="margin over the accuracy target"> ⚠</span>}</span>
         </div>
-        <div className="sprof-kpi"><span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">{fmt(v.speed_kmh)}</span><span className="sprof-kpi-unit">km/h</span></div>
+        <div className="sprof-kpi" title={marginBreakdown(v, "avg")}>
+          <span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">{fmt(v.speed_kmh)}</span>
+          <span className="sprof-kpi-unit">km/h {margin(v, "avg") ?? ""}</span>
+        </div>
         <div className="sprof-kpi"><span className="sprof-kpi-label">Min</span><span className="sprof-kpi-val">{fmt(v.speed_min_kmh)}</span><span className="sprof-kpi-unit">km/h</span></div>
         <div className="sprof-kpi"><span className="sprof-kpi-label">Max at</span><span className="sprof-kpi-val">{fmt(v.d_max_m)}</span><span className="sprof-kpi-unit">m after the first line</span></div>
       </div>
@@ -96,7 +100,7 @@ export default function SpeedProfile({ v, limit, tNow }: Props) {
         )}
       </div>
       <div className="sprof-foot small muted">
-        Momentary speed (0.5 s window) along the section · shaded = ±2σ measurement noise · dashed = average A→B · red = speed limit
+        Momentary speed (0.5 s window) along the section · shaded = ±2σ measurement noise · dashed = average A→B · red = speed limit · hover a value for its margin of error
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 from .. import calibration as calib
 from ..config import Calibration, ProjectConfig
 from ..timing import check_timing
+from ..validation import Reference, evaluate
 from .jobs import JobManager
 from .projects import OUTPUT_FILES, ProjectStore
 
@@ -262,6 +264,36 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         r = d / "render.json"
         data["render"] = json.loads(r.read_text(encoding="utf-8")) if (d / "render.mp4").exists() and r.exists() else None
         return data
+
+    # -- validation run: known reference speeds vs. the measured ones --------------------
+    def _validation(pid: str, refs: Optional[list[Reference]] = None) -> dict:
+        d = _dir(pid)
+        p = d / "validation.json"
+        stored = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        if refs is None:
+            refs = [Reference.model_validate(r) for r in stored.get("references", [])]
+        res = d / "results.json"
+        vehicles = json.loads(res.read_text(encoding="utf-8"))["vehicles"] if res.exists() else []
+        data = {"references": [r.model_dump(mode="json") for r in refs], "updated": time.time(),
+                "report": evaluate(refs, vehicles)}
+        if refs or p.exists():
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp.replace(p)
+        return data
+
+    @app.get("/api/projects/{pid}/validation")
+    def get_validation(pid: str):
+        """Reference speeds of a validation run, with the report against the current results."""
+        return _validation(pid)
+
+    @app.put("/api/projects/{pid}/validation")
+    def put_validation(pid: str, body: dict[str, Any] = Body(...)):
+        try:
+            refs = [Reference.model_validate(r) for r in body.get("references", [])]
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return _validation(pid, refs)
 
     @app.get("/api/projects/{pid}/overlay")
     def get_overlay(pid: str):

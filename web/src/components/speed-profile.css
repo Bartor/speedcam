@@ -32,3 +32,13 @@
 .calib-check { margin-bottom: var(--s-3); }
 tr.selected td { background: var(--accent-soft); }
 .subhead { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: var(--s-4) 0 var(--s-2); }
+
+/* margin of error */
+td .pm, .pm { margin-left: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.u-flag { color: var(--warning); font-weight: 600; }
+.margin-kv { margin-bottom: var(--s-3); }
+.table-wrap.validation-wrap { margin-bottom: var(--s-3); border-bottom: 1px solid var(--border); border-radius: 0; }
+table.validation td { padding-top: 3px; padding-bottom: 3px; }
+table.validation .cell-in { width: 72px; min-height: 26px; }
+table.validation .cell-in.wide { width: 110px; }
+table.validation select { min-height: 26px; }

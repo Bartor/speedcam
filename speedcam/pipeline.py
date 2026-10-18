@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import calibration
+from . import calibration, uncertainty
 from .config import ProjectConfig
 from .detection import make_detector
 from .speed import calibration_check, compute_speeds
@@ -321,12 +321,13 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 
     reporter.progress("computing speeds", 0, 1)
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    budget = margin_of_error(cfg, results, renders, cal, fps)
     n_fail = sum(1 for r in stab_rows if not r[1])
     if pts_anomalies:
         reporter.log(f"{len(pts_anomalies)} frames have container timestamps off the expected grid "
                      "(possible dropped/duplicated frames)", "warning")
 
-    summary = write_results(out, cfg, results, info, fps, cal, timing_msgs, {
+    summary = write_results(out, cfg, results, info, fps, cal, timing_msgs, budget, {
         "frames": done, "registration_failures": n_fail,
         "detections_per_frame": n_dets / max(done, 1), **track_diagnostics(df, renders),
         "camera_drift": camera_drift(drift, cal.m_per_px),
@@ -337,10 +338,18 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     return summary
 
 
+def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal, fps: float) -> dict:
+    """Per-vehicle uncertainty budget (fills the speed_*_u_kmh fields); see uncertainty.py."""
+    return uncertainty.annotate(results, renders, cfg.calibration, cal, fps, cfg.uncertainty,
+                                cfg.speed.momentary_window_s)
+
+
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
-                  timing_msgs: list[str], run: dict) -> dict:
+                  timing_msgs: list[str], budget: Optional[dict], run: dict) -> dict:
     cols = ["track_id", "class", "direction", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
-            "path_length_m", "chord_m", "speed_kmh", "speed_max_kmh", "speed_min_kmh", "speed_sigma_kmh",
+            "path_length_m", "chord_m", "speed_kmh", "speed_avg_u_kmh", "speed_avg_u_lower_kmh",
+            "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
+            "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct", "u_over_target",
             "t_max_s", "d_max_m", "speed_trend_pct", "speed_line_kmh", "disagreement_pct",
             "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags"]
     pd.DataFrame(results, columns=cols).to_csv(out / "results.csv", index=False, float_format="%.4f")
@@ -364,6 +373,7 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
             for d in ("A->B", "B->A")
         },
         "calibration_check": calibration_check(results),
+        "uncertainty": budget,
         "vehicles": results,
     }
     (out / "results.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -383,7 +393,9 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
     run = {**prev.get("run", {}), **track_diagnostics(df, renders)}
-    return write_results(out, cfg, results, info, fps, cal, check_timing(info, fps, cfg.real_duration_s), run)
+    budget = margin_of_error(cfg, results, renders, cal, fps)
+    return write_results(out, cfg, results, info, fps, cal, check_timing(info, fps, cfg.real_duration_s),
+                         budget, run)
 
 
 def camera_drift(drift_px: list[float], m_per_px: float) -> Optional[dict]:

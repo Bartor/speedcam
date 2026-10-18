@@ -144,8 +144,10 @@ def _spread_deg(vectors: np.ndarray) -> float:
     return float(np.minimum(diff, 180 - diff).max()) if len(ang) > 1 else 0.0
 
 
-def compute(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> CalibrationResult:
-    warnings: list[str] = []
+def fit(cal: Calibration) -> tuple[np.ndarray, str, list]:
+    """The image -> ground mapping alone: (H, method, polygon distances used).
+
+    Cheap enough to re-run a few hundred times with perturbed inputs (see uncertainty.py)."""
     pts = cal.points
     segs = cal.segments
     poly_d: list = []
@@ -173,6 +175,14 @@ def compute(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> C
         method = "scale"
     else:
         raise ValueError("Calibration needs at least one distance segment or two control points")
+    return H, method, poly_d
+
+
+def compute(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> CalibrationResult:
+    warnings: list[str] = []
+    pts = cal.points
+    segs = cal.segments
+    H, method, poly_d = fit(cal)
 
     residuals: list[dict] = []
     for k, pd_ in enumerate(poly_d):

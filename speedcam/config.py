@@ -143,6 +143,7 @@ class RenderSettings(BaseModel):
     subtitle: str = ""
     footer: str = ""
     show_hud: bool = False  # technical time/frame line in the corner
+    show_margin: bool = True  # each panel row shows the max speed's 95 % margin of error
     show_unmeasured: bool = False  # boxes on vehicles that never cross both lines (parked cars etc.)
     font: Optional[str] = None  # .ttf for text; default Segoe UI / DejaVu Sans
 
@@ -150,6 +151,23 @@ class RenderSettings(BaseModel):
 class StatsSettings(BaseModel):
     permitted_error_kmh: float = 2.0
     confidence: float = 0.95
+
+
+class UncertaintySettings(BaseModel):
+    """Inputs of the per-vehicle margin of error (see uncertainty.py)."""
+
+    # standard uncertainty (1 sigma) of each typed calibration distance / control-point position:
+    # tape ~0.02 m, orthophoto ~0.10 m
+    distance_tolerance_m: float = 0.05
+    click_tolerance_px: float = 0.5  # 1 sigma of each clicked calibration point
+    # drone height above the road (m). Known: the uncorrected height-parallax bias is bounded
+    # and declared. Unknown: the margin says parallax is not covered.
+    drone_height_m: Optional[float] = None
+    # height of the tracked box centre above the road per class (m); parallax scales speeds by H/(H-h)
+    point_height_m: dict[str, float] = Field(
+        default_factory=lambda: {"car": 0.8, "motorcycle": 0.7, "truck": 1.8, "bus": 1.5})
+    target_pct: float = 2.0  # vehicles whose 95 % margin exceeds this share of the speed are flagged
+    mc_samples: int = 200
 
 
 class ProjectConfig(BaseModel):
@@ -165,6 +183,7 @@ class ProjectConfig(BaseModel):
     speed: SpeedSettings = Field(default_factory=SpeedSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
     stats: StatsSettings = Field(default_factory=StatsSettings)
+    uncertainty: UncertaintySettings = Field(default_factory=UncertaintySettings)
 
 
 def load_config(path: str | Path) -> ProjectConfig:

@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import calibration
 from .config import ProjectConfig, RenderSettings
-from .pipeline import Reporter, resolve_capture_fps
+from .pipeline import Reporter, margin_of_error, resolve_capture_fps
 from .speed import TrackRender, compute_speeds
 from .stabilization import transform_points
 from .timing import probe
@@ -155,6 +155,12 @@ class Pills:
 
 
 # -- side panel -----------------------------------------------------------------------------
+def margin_text(v: dict, key: str) -> str:
+    """'±1.1', or '+0.5 −1.4' when an uncorrected one-sided parallax bias widens the lower side."""
+    u, lo = v[f"speed_{key}_u_kmh"], v.get(f"speed_{key}_u_lower_kmh", v[f"speed_{key}_u_kmh"])
+    return f"±{u:.1f}" if lo - u < 0.05 else f"+{u:.1f} −{lo:.1f}"
+
+
 class Panel:
     """Leaderboard-style panel: totals, latest vehicle's speed profile and the list of vehicles."""
 
@@ -270,8 +276,10 @@ class Panel:
             unit_w = f("bold", int(14 * k)).getlength("km/h") + int(6 * k)
             d.text((rx - unit_w, y + int(2 * k)), f"{v['speed_max_kmh']:.1f}", font=f("num", int(32 * k)),
                    fill=col, anchor="rt")
-            d.text((rx, y + row_h - int(14 * k)), f"avg {v['speed_kmh']:.1f}", font=f("regular", int(15 * k)),
-                   fill=MUTED, anchor="rb")
+            sub = f"avg {v['speed_kmh']:.1f}"
+            if rs.show_margin and v.get("speed_max_u_kmh") is not None:
+                sub = f"{margin_text(v, 'max')}  ·  {sub}"
+            d.text((rx, y + row_h - int(14 * k)), sub, font=f("regular", int(15 * k)), fill=MUTED, anchor="rb")
             y += row_h
         if len(rows) > n_rows and n_rows:
             d.text((x, y + int(2 * k)), f"+ {len(rows) - n_rows} more", font=f("regular", int(15 * k)),
@@ -472,6 +480,8 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     world = calibration.apply_h(cal.H, tracks[["rx", "ry"]].to_numpy(float))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    if rs.panel != "none" and rs.show_margin:
+        margin_of_error(cfg, results, renders, cal, fps)
     tf = np.load(out / "transforms.npz")
     transforms = {"frames": tf["frames"], "T": tf["T"]}
 

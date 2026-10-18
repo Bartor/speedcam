@@ -90,6 +90,23 @@ def first_crossing(t: np.ndarray, P: np.ndarray, line: np.ndarray, extend: float
     return Crossing(hits[0][0], hits[0][1], len(hits))
 
 
+def slope_se(ts: np.ndarray, res: np.ndarray, corr_s: float) -> float:
+    """Standard error (m/s) of the arc-length regression slope.
+
+    `res` are residuals against a constant-acceleration fit: real acceleration doesn't bias the
+    least-squares slope over the section (it equals the mean speed), so it isn't counted as noise.
+    Samples are correlated over about `corr_s` (smoothing, box wobble), so the plain SE is
+    inflated to the number of independent samples in the section.
+    """
+    n = len(ts)
+    sxx = float(((ts - ts.mean()) ** 2).sum())
+    if n < 4 or sxx <= 0:
+        return 0.0
+    se = np.sqrt(float(res @ res) / (n - 3) / sxx)
+    n_eff = max(4.0, (ts[-1] - ts[0]) / max(corr_s, 1e-6))
+    return float(se * np.sqrt(max(1.0, (n - 3) / (n_eff - 3))))
+
+
 def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
                   line_a: np.ndarray, line_b: np.ndarray, s: SpeedSettings,
                   cls: str = "car", mean_conf: float = 1.0) -> Optional[TrackRender]:
@@ -138,13 +155,14 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         v_arc = path_len / dt
         flags.append("few_points")
     # residuals against a constant-acceleration fit: track jitter, not real speed change
-    accel, quad_max, rms = 0.0, 0.0, 0.0
+    accel, quad_max, rms, avg_se = 0.0, 0.0, 0.0, None
     if len(ts) >= 4:
         q = np.polyfit(ts, ss, 2)
         accel = float(2 * q[0])
         quad_res = ss - np.polyval(q, ts)
         quad_max = float(np.abs(quad_res).max())
         rms = float(np.sqrt(np.mean(quad_res ** 2)))
+        avg_se = slope_se(ts, quad_res, max(s.smooth_window_s, s.momentary_window_s))
     v_arc = float(v_arc)
     disagreement = (v_arc - v_line) / v_line if v_line > 0 else np.inf
 
@@ -174,6 +192,7 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         "chord_m": float(np.linalg.norm(second.point - first.point)),
         "speed_kmh": v_arc * 3.6,
         "speed_line_kmh": v_line * 3.6,
+        "speed_avg_se_kmh": None if avg_se is None else avg_se * 3.6,
         "disagreement_pct": float(disagreement * 100),
         "fit_residual_m": rms,
         "accel_mps2": accel,

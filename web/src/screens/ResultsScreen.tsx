@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import "../components/speed-profile.css";
-import { api, fmt, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
+import { api, fmt, margin, marginBreakdown, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
+import MarginPanel from "../components/MarginPanel";
+import ValidationPanel from "../components/ValidationPanel";
 import Histogram from "../components/Histogram";
 import ProgressBar from "../components/ProgressBar";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
@@ -16,8 +18,8 @@ const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "t_entry_s", label: "Entry s", d: 2 },
   { key: "dt_s", label: "Δt s", d: 3 },
   { key: "path_length_m", label: "Path m", d: 2 },
-  { key: "speed_max_kmh", label: "Max", d: 1, title: "Highest momentary speed between the lines (0.5 s window)" },
-  { key: "speed_kmh", label: "Avg", d: 1, title: "Average A→B: arc-length regression" },
+  { key: "speed_max_kmh", label: "Max", d: 1, title: "Highest momentary speed between the lines (0.5 s window), ± its 95 % margin of error (hover a value for the breakdown)" },
+  { key: "speed_kmh", label: "Avg", d: 1, title: "Average A→B: arc-length regression, ± its 95 % margin of error" },
   { key: "speed_line_kmh", label: "Lines", d: 1, title: "Line-crossing audit speed" },
   { key: "disagreement_pct", label: "Δ %", d: 2 },
   { key: "fit_residual_m", label: "Resid m", d: 3 },
@@ -43,7 +45,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
     speed_limit_kmh: rs.speed_limit_kmh,
     panel: rs.panel ?? "right", panel_layout: rs.panel_layout ?? "overlay", panel_sort: rs.panel_sort ?? "latest",
     panel_rows: rs.panel_rows ?? 7, title: rs.title ?? "", subtitle: rs.subtitle ?? "", footer: rs.footer ?? "",
-    show_hud: !!rs.show_hud,
+    show_hud: !!rs.show_hud, show_margin: rs.show_margin ?? true,
     scale: rs.scale === 0.5 && project.info.height > 1080 ? +(1080 / project.info.height).toFixed(4) : rs.scale,
   });
 
@@ -95,6 +97,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         output_fps: rset.output_fps === "" ? null : +rset.output_fps, lut: rset.lut || null,
         panel: rset.panel, panel_layout: rset.panel_layout, panel_sort: rset.panel_sort, panel_rows: +rset.panel_rows,
         title: rset.title, subtitle: rset.subtitle, footer: rset.footer, show_hud: rset.show_hud,
+        show_margin: rset.show_margin,
       };
       setRenderJob((await api.render(project.id, body)).id);
     } catch (e) { setErr(String(e)); }
@@ -172,8 +175,13 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                       onClick={() => { setSelected(v.track_id); seekTo(v); }}>
                       {COLS.map((c) => {
                         const x = v[c.key];
-                        return <td key={c.key} className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
+                        const mk = c.key === "speed_max_kmh" ? "max" : c.key === "speed_kmh" ? "avg" : null;
+                        const pm = mk && margin(v, mk);
+                        return <td key={c.key} title={mk ? marginBreakdown(v, mk) : undefined}
+                          className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
                           {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
+                          {pm && <span className="pm">{pm}</span>}
+                          {mk === "max" && v.u_over_target && <span className="u-flag"> ⚠</span>}
                         </td>;
                       })}
                       <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
@@ -183,6 +191,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                 })}
               </tbody>
             </table>
+            {res.uncertainty && <p className="footnote">± = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias).
+              {" "}⚠ = margin over the {res.uncertainty.target_pct} % target. Hover a speed for its breakdown.</p>}
             {rows.length === 0 && (
               <div className="banner warn small">
                 No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.
@@ -195,6 +205,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             )}
           </div>
         </section>
+
+        <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
       </div>
 
       <aside className="res-side">
@@ -227,6 +239,9 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
           <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines." : "Per vehicle: average speed from line A to line B."}</p>
         </section>
+
+        <MarginPanel project={project} res={res} onProject={onChanged}
+          onRecomputed={(r) => { setRes(r); api.overlay(project.id).then(setOverlay); }} />
 
         <section className="panel">
           <h3>Export</h3>
@@ -279,6 +294,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
               </select>
               <label>Rows</label>
               <input type="number" min={1} max={20} value={rset.panel_rows} onChange={(e) => setRset({ ...rset, panel_rows: e.target.value })} />
+              <label title="Each row shows the max speed's 95 % margin of error">Margin of error</label>
+              <input type="checkbox" checked={rset.show_margin} onChange={(e) => setRset({ ...rset, show_margin: e.target.checked })} />
               <label>Title</label>
               <input type="text" value={rset.title} placeholder="e.g. street, city" onChange={(e) => setRset({ ...rset, title: e.target.value })} />
               <label>Subtitle</label>
