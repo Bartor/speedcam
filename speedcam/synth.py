@@ -40,8 +40,11 @@ def road_texture(w: int, h: int, m_per_px: float, rng: np.random.Generator) -> n
 def make_synthetic(out: str | Path, speed_kmh: float = 50.0, m_per_px: float = 0.05,
                    size: tuple[int, int] = (1280, 720), capture_fps: float = 120.0,
                    container_fps: float = 30.0, jitter_px: float = 0.5, sway_px: float = 4.0,
-                   sway_deg: float = 0.3, seed: int = 0, gap_m: float = 24.0) -> ProjectConfig:
-    """Write the clip and return a ready-to-run ProjectConfig (blob detector, scale calibration)."""
+                   sway_deg: float = 0.3, seed: int = 0, gap_m: float = 24.0,
+                   textured: bool = False) -> ProjectConfig:
+    """Write the clip and return a ready-to-run ProjectConfig (blob detector, scale calibration).
+
+    `textured` paints a fixed pattern on the car (shades of red) so optical flow can follow it."""
     out = Path(out)
     rng = np.random.default_rng(seed)
     W, H = size
@@ -51,6 +54,10 @@ def make_synthetic(out: str | Path, speed_kmh: float = 50.0, m_per_px: float = 0
     x0 = -car_l
     n_frames = int(np.ceil((W + 2 * car_l) / v_px))
     lane_y = H / 2 + 3.5 / m_per_px / 2
+    if textured:
+        cl, cw = int(np.ceil(car_l)), int(np.ceil(car_w))
+        shade = cv2.GaussianBlur(rng.normal(1.0, 0.35, (cw, cl)).astype(np.float32), (0, 0), 1.5)
+        car_img = np.clip(np.float32([40, 40, 210]) * np.clip(shade, 0.55, 1.2)[..., None], 0, 255)
 
     writer = FFmpegWriter(out, W, H, container_fps, encoder="x264", quality=14)
     phase = rng.uniform(0, 2 * np.pi, 3)
@@ -59,8 +66,14 @@ def make_synthetic(out: str | Path, speed_kmh: float = 50.0, m_per_px: float = 0
         scene = bg.copy()
         cx = x0 + v_px * i + rng.normal(0, jitter_px)
         cy = lane_y + rng.normal(0, jitter_px)
-        rect = cv2.boxPoints(((cx, cy), (car_l, car_w), 0.0))
-        cv2.fillPoly(scene, [np.round(rect * 16).astype(np.int32)], (40, 40, 210), cv2.LINE_AA, shift=4)
+        if textured:
+            A = np.float32([[1, 0, cx - car_l / 2], [0, 1, cy - car_w / 2]])
+            car = cv2.warpAffine(car_img, A, (W, H), flags=cv2.INTER_CUBIC)
+            a = cv2.warpAffine(np.ones(car_img.shape[:2], np.float32), A, (W, H))[..., None]
+            scene = (scene * (1 - a) + car * a).astype(np.uint8)
+        else:
+            rect = cv2.boxPoints(((cx, cy), (car_l, car_w), 0.0))
+            cv2.fillPoly(scene, [np.round(rect * 16).astype(np.int32)], (40, 40, 210), cv2.LINE_AA, shift=4)
         # camera sway: smooth, zero at t=0 so frame 0 is the reference
         dx = sway_px * (np.sin(2 * np.pi * 0.7 * t + phase[0]) - np.sin(phase[0]))
         dy = sway_px * (np.sin(2 * np.pi * 0.5 * t + phase[1]) - np.sin(phase[1]))

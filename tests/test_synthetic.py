@@ -23,6 +23,22 @@ def test_synthetic_speed_within_half_percent(tmp_path, speed, seed):
 
 
 @pytest.mark.slow
+def test_synthetic_textured_car_uses_flow(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=60.0, seed=2, size=(960, 540), m_per_px=0.07,
+                         textured=True)
+    summary = analyze(cfg, tmp_path / "out")
+    v = [v for v in summary["vehicles"] if v["valid"]][0]
+    assert v["speed_kmh"] == pytest.approx(60.0, rel=0.005)
+    assert v["speed_max_kmh"] == pytest.approx(60.0, abs=0.6)
+    tracks = pd.read_parquet(tmp_path / "out" / "tracks.parquet")
+    between = tracks[(tracks["frame"] >= v["frame_entry"]) & (tracks["frame"] <= v["frame_exit"])]
+    assert np.isfinite(between["frx"]).mean() > 0.9  # positions came from flow, not the box
+
+
+@pytest.mark.slow
 def test_render_produces_video(tmp_path):
     cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=60.0, size=(640, 360), m_per_px=0.1)
     analyze(cfg, tmp_path / "out")

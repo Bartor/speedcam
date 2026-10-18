@@ -60,8 +60,8 @@ def smooth(xy: np.ndarray, fps: float, s: SpeedSettings) -> np.ndarray:
 def momentary_speed(P: np.ndarray, fps: float, window_s: float) -> np.ndarray:
     """Speed (km/h) per frame from a local quadratic fit over `window_s` (Savitzky-Golay derivative).
 
-    Shorter windows follow speed changes faster but pass more box-centre wobble; on 4K drone
-    footage 0.5 s keeps the noise around +-0.4 km/h without biasing the maximum upwards.
+    Shorter windows follow speed changes faster but pass more position noise; on 4K drone
+    footage with flow positions 0.5 s keeps it around +-0.2 km/h without biasing the maximum upwards.
     """
     n = odd_window(int(round(window_s * fps)), 2, len(P))
     if n <= 2:

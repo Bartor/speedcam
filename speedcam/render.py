@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import calibration
 from .config import ProjectConfig, RenderSettings
+from .flow import reference_positions
 from .pipeline import Reporter, margin_of_error, resolve_capture_fps
 from .speed import TrackRender, compute_speeds
 from .stabilization import transform_points
@@ -477,7 +478,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     fps = resolve_capture_fps(cfg, info, reporter)
     cal = calibration.compute(cfg.calibration, (info.width, info.height))
     tracks = pd.read_parquet(out / "tracks.parquet")
-    world = calibration.apply_h(cal.H, tracks[["rx", "ry"]].to_numpy(float))
+    world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
     if rs.panel != "none" and rs.show_margin:
@@ -556,7 +557,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     fps = resolve_capture_fps(cfg, info, Reporter())
     cal = calibration.compute(cfg.calibration, (info.width, info.height))
     tracks = pd.read_parquet(out / "tracks.parquet")
-    world = calibration.apply_h(cal.H, tracks[["rx", "ry"]].to_numpy(float))
+    world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
     tf = np.load(out / "transforms.npz")

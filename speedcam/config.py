@@ -92,6 +92,37 @@ class TrackingSettings(BaseModel):
     min_consecutive_frames: int = 3
 
 
+class FlowSettings(BaseModel):
+    """Vehicle positions from optical flow on the vehicle's texture, anchored to the box centre
+    (see flow.py). Off = box centres only."""
+
+    enabled: bool = True
+    # complementary filter time constant: flow gives the frame-to-frame motion, the box centre
+    # the long-run position. Longer = smoother, but slower to absorb flow drift.
+    anchor_s: float = 1.0
+    max_points: int = 100  # features per vehicle (more = steadier fit; accuracy over speed)
+    min_points: int = 6  # fewer RANSAC inliers = fall back to the box centre
+    reseed_below: float = 0.6  # top up features when fewer than this share of max_points survive
+    inner: float = 0.9  # features are picked inside the box shrunk by this factor (and by the LK window)
+    gate: float = 1.15  # tracked features must stay inside the box grown by this factor
+    quality: float = 0.01
+    win: int = 15  # LK window, px
+    levels: int = 3
+    crop_margin_px: int = 96  # LK runs on a crop around each vehicle's features: must exceed its motion per frame
+    fb_max_px: float = 0.5  # forward-backward LK error
+    lk_iters: int = 100
+    lk_eps: float = 0.001
+    ransac_iters: int = 1000
+    ransac_px: float = 0.5
+    max_coast_s: float = 0.5  # keep following a vehicle on flow alone through detector gaps
+    # features must move like the box centre did over the last `velocity_s` (within the larger of
+    # motion_gate_px and motion_gate x speed): drops features stuck on wires, poles or the road
+    velocity_s: float = 0.5
+    motion_gate: float = 0.3
+    motion_gate_px: float = 1.5
+    max_offset: float = 0.15  # flow further than this share of the box diagonal from the box = reset
+
+
 class StabilizationSettings(BaseModel):
     enabled: bool = True
     model: Literal["similarity", "affine", "homography"] = "similarity"
@@ -117,8 +148,9 @@ class SpeedSettings(BaseModel):
     disagreement_invalidates: bool = False
     max_gap_s: float = 0.3
     min_points: int = 10
-    # window for momentary speed (max/min, profiles). Shorter follows changes faster but adds noise:
-    # measured on 4K footage, 0.25 s ~ +-0.8 km/h, 0.5 s ~ +-0.4 km/h.
+    # window for momentary speed (max/min, profiles). Shorter follows changes faster but adds noise.
+    # Measured on 10 4K clips with flow positions: 0.25 s ~ +-0.28 km/h (max +0.16 km/h high),
+    # 0.5 s ~ +-0.18 km/h (max unbiased, +0.02); box centres alone: +-0.57 / +-0.29.
     momentary_window_s: float = 0.5
     line_extend: float = 0.1
 
@@ -178,6 +210,7 @@ class ProjectConfig(BaseModel):
     calibration: Calibration = Field(default_factory=Calibration)
     detection: DetectionSettings = Field(default_factory=DetectionSettings)
     tracking: TrackingSettings = Field(default_factory=TrackingSettings)
+    flow: FlowSettings = Field(default_factory=FlowSettings)
     stabilization: StabilizationSettings = Field(default_factory=StabilizationSettings)
     speed: SpeedSettings = Field(default_factory=SpeedSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)

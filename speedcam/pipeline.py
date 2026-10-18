@@ -18,6 +18,7 @@ import pandas as pd
 from . import calibration, uncertainty
 from .config import ProjectConfig
 from .detection import make_detector
+from .flow import FlowTracker, reference_positions
 from .speed import calibration_check, compute_speeds
 from .stabilization import Stabilizer, transform_points
 from .stats import summarize
@@ -193,6 +194,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     if cfg.stabilization.enabled:
         stab = Stabilizer(ref_frame, cfg.stabilization, detector(ref_frame).xyxy)
     tracker = Tracker(cfg.tracking, fps)
+    flow = FlowTracker(cfg.flow, fps) if cfg.flow.enabled else None
 
     start = max(0, cfg.start_frame)
     end = min(cfg.end_frame or info.nb_frames, info.nb_frames)
@@ -256,12 +258,19 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
             del trails[tid][:1]
             if not trails[tid]:
                 del trails[tid]
+        if flow:
+            flow_ref, flow_n = flow.update(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), T, ids, dets.corners,
+                                           centers_ref)
+        else:
+            flow_ref, flow_n = np.full((len(dets), 2), np.nan), np.zeros(len(dets))
         if len(dets):
-            world = calibration.apply_h(cal.H, centers_ref)
+            pos = np.where(np.isfinite(flow_ref), flow_ref, centers_ref)
+            world = calibration.apply_h(cal.H, pos)
             cf = dets.centers
             n = len(dets)
             rows.append(np.column_stack([
                 np.full(n, i), ids, dets.cls, dets.conf, cf, centers_ref, world, corners_ref.reshape(n, 8),
+                flow_ref, flow_n,
             ]))
 
         state["done"] += 1
@@ -306,9 +315,9 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     done, n_dets = state["done"], state["n_dets"]
 
     cols = ["frame", "track_id", "cls", "conf", "cx", "cy", "rx", "ry", "x_m", "y_m"] + \
-           [f"c{k}{a}" for k in range(4) for a in "xy"]
+           [f"c{k}{a}" for k in range(4) for a in "xy"] + ["frx", "fry", "flow_n"]
     df = pd.DataFrame(np.concatenate(rows) if rows else np.zeros((0, len(cols))), columns=cols)
-    for c in ("frame", "track_id", "cls"):
+    for c in ("frame", "track_id", "cls", "flow_n"):
         df[c] = df[c].astype(np.int64)
     df["t"] = df["frame"] / fps
     df = df[df["track_id"] >= 0].reset_index(drop=True)
@@ -387,8 +396,7 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     fps = resolve_capture_fps(cfg, info, Reporter())
     cal = calibration.compute(cfg.calibration, (info.width, info.height))
     df = pd.read_parquet(out / "tracks.parquet")
-    pts = df[["rx", "ry"]].to_numpy(float)
-    world = calibration.apply_h(cal.H, pts)
+    world = calibration.apply_h(cal.H, reference_positions(df))
     df["x_m"], df["y_m"] = world[:, 0], world[:, 1]
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
