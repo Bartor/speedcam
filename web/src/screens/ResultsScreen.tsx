@@ -180,8 +180,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                         return <td key={c.key} title={mk ? marginBreakdown(v, mk) : undefined}
                           className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
                           {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
-                          {pm && <span className="pm">{pm}</span>}
-                          {mk === "max" && v.u_over_target && <span className="u-flag"> ⚠</span>}
+                          {pm && <span className="pm">({pm})</span>}
                         </td>;
                       })}
                       <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
@@ -191,8 +190,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                 })}
               </tbody>
             </table>
-            {res.uncertainty && <p className="footnote">± = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias).
-              {" "}⚠ = margin over the {res.uncertainty.target_pct} % target. Hover a speed for its breakdown.</p>}
+            {res.uncertainty && <p className="footnote">(± %) = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias). Hover a speed for its breakdown.</p>}
             {rows.length === 0 && (
               <div className="banner warn small">
                 No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.

@@ -150,7 +150,6 @@ def annotate(results: list[dict], renders: dict, cal_cfg: Calibration, cal_res, 
         g0 = calibration._gap_between(calibration.apply_h(H0, la), calibration.apply_h(H0, lb))
         gap_rel = float(np.std(gaps, ddof=1) / g0) if g0 > 0 else None
 
-    over = 0
     for r in results:
         rend = renders.get(r["track_id"])
         v_avg, v_max = r["speed_kmh"], r.get("speed_max_kmh", r["speed_kmh"])
@@ -176,11 +175,9 @@ def annotate(results: list[dict], renders: dict, cal_cfg: Calibration, cal_res, 
             r[f"speed_{key}_u_lower_kmh"] = u + bias  # measured minus this: lowest plausible true speed
         u_pct = 100 * max(r["speed_max_u_lower_kmh"] / max(v_max, 1e-9), r["speed_avg_u_lower_kmh"] / max(v_avg, 1e-9))
         r["u_pct"] = float(u_pct)
-        r["u_over_target"] = bool(u_pct > us.target_pct)
         r["u_cal_pct"] = float(100 * K * rel_avg)
         r["u_parallax_pct"] = None if b is None else float(100 * b)
         r["uncertainty"] = terms
-        over += r["u_over_target"] and r["valid"]
 
     valid = [r for r in results if r["valid"]]
     return {
@@ -192,7 +189,5 @@ def annotate(results: list[dict], renders: dict, cal_cfg: Calibration, cal_res, 
         "fit_dof": dof,
         "fit_inflation": infl,
         "parallax": "bounded" if us.drone_height_m else "unknown",
-        "target_pct": us.target_pct,
-        "n_over_target": int(over),
         "median_u_pct": float(np.median([r["u_pct"] for r in valid])) if valid else None,
     }

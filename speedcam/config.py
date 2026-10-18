@@ -166,7 +166,6 @@ class UncertaintySettings(BaseModel):
     # height of the tracked box centre above the road per class (m); parallax scales speeds by H/(H-h)
     point_height_m: dict[str, float] = Field(
         default_factory=lambda: {"car": 0.8, "motorcycle": 0.7, "truck": 1.8, "bus": 1.5})
-    target_pct: float = 2.0  # vehicles whose 95 % margin exceeds this share of the speed are flagged
     mc_samples: int = 200
 
 

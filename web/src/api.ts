@@ -74,15 +74,15 @@ export interface Vehicle {
   // margin of error (k=2, ~95 %); *_u_lower adds the one-sided uncorrected parallax bias below the value
   speed_avg_se_kmh?: number | null;
   speed_max_u_kmh?: number; speed_max_u_lower_kmh?: number; speed_avg_u_kmh?: number; speed_avg_u_lower_kmh?: number;
-  u_pct?: number; u_cal_pct?: number; u_parallax_pct?: number | null; u_over_target?: boolean;
+  u_pct?: number; u_cal_pct?: number; u_parallax_pct?: number | null;
   uncertainty?: Record<"max" | "avg", { calibration: number; noise: number; parallax_bias: number }>;
 }
 
 export interface UncertaintySummary {
   k: number; mc_samples: number; line_gap_rel_pct: number | null; fit_ratio: number | null; fit_dof: number;
-  fit_inflation: number; parallax: "bounded" | "unknown"; target_pct: number; n_over_target: number;
+  fit_inflation: number; parallax: "bounded" | "unknown";
   median_u_pct: number | null;
-  settings: { distance_tolerance_m: number; click_tolerance_px: number; drone_height_m: number | null; target_pct: number };
+  settings: { distance_tolerance_m: number; click_tolerance_px: number; drone_height_m: number | null };
 }
 
 export interface Reference {
@@ -277,11 +277,13 @@ export function timeAgo(t: number | null | undefined): string {
   return new Date(t * 1000).toLocaleDateString();
 }
 
-/** "±1.1", or "+0.5 −1.4" when the uncorrected parallax bias widens the lower side. */
+/** "±1.8 %", or "+1.8 −3.1 %" when the uncorrected parallax bias widens the lower side. */
 export function margin(v: Vehicle, key: "max" | "avg"): string | null {
   const u = v[`speed_${key}_u_kmh`], lo = v[`speed_${key}_u_lower_kmh`] ?? u;
-  if (u === undefined || u === null || lo === undefined) return null;
-  return lo - u < 0.05 ? `±${u.toFixed(1)}` : `+${u.toFixed(1)} −${lo.toFixed(1)}`;
+  const val = key === "max" ? v.speed_max_kmh : v.speed_kmh;
+  if (u === undefined || u === null || lo === undefined || !(val > 0)) return null;
+  const p = (x: number) => ((100 * x) / val).toFixed(1);
+  return p(lo) === p(u) ? `±${p(u)} %` : `+${p(u)} −${p(lo)} %`;
 }
 
 /** Hover text: how the margin of error is made up. */
@@ -291,7 +293,7 @@ export function marginBreakdown(v: Vehicle, key: "max" | "avg"): string {
   const val = key === "max" ? v.speed_max_kmh : v.speed_kmh;
   const pct = (x: number) => `${x.toFixed(2)} km/h (${((100 * x) / val).toFixed(2)} %)`;
   const lines = [
-    `${key === "max" ? "Max" : "Average A→B"} ${val.toFixed(1)} km/h, margin ${margin(v, key)} km/h (95 %, k=2)`,
+    `${key === "max" ? "Max" : "Average A→B"} ${val.toFixed(1)} km/h, margin ${margin(v, key)} (95 %, k=2)`,
     `• calibration: ±${pct(t.calibration)}`,
     `• ${key === "max" ? "momentary-speed noise" : "regression noise"}: ±${pct(t.noise)}`,
     t.parallax_bias > 0
@@ -299,7 +301,6 @@ export function marginBreakdown(v: Vehicle, key: "max" | "avg"): string {
       : "• height parallax: not corrected and not bounded (drone height unknown)",
     "Terms are independent and combined root-sum-square.",
   ];
-  if (v.u_over_target) lines.push(`Over the accuracy target: the margin is ${fmt(v.u_pct, 1)} % of the speed.`);
   return lines.join("\n");
 }
 

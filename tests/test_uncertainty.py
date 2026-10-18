@@ -108,15 +108,14 @@ def test_vehicle_budget_is_rss_of_terms():
     assert r["uncertainty"]["max"]["noise"] == pytest.approx(2 * r["speed_sigma_kmh"])
     assert r["uncertainty"]["avg"]["noise"] == pytest.approx(2 * r["speed_avg_se_kmh"])
     assert s["parallax"] == "unknown" and r["u_parallax_pct"] is None
-    assert not r["u_over_target"]
 
 
-def test_parallax_widens_lower_side_and_flags_target():
-    r, s = _measure(UncertaintySettings(drone_height_m=50.0, point_height_m={"car": 1.5}, target_pct=2.0), CAL20)
+def test_parallax_widens_lower_side():
+    r, s = _measure(UncertaintySettings(drone_height_m=50.0, point_height_m={"car": 1.5}), CAL20)
     b = 50 / 48.5 - 1
     assert r["u_parallax_pct"] == pytest.approx(100 * b)
     assert r["speed_avg_u_lower_kmh"] - r["speed_avg_u_kmh"] == pytest.approx(r["speed_kmh"] * b / (1 + b))
-    assert r["u_over_target"] and s["n_over_target"] == 1
+    assert r["u_pct"] > 100 * b
 
 
 def test_check_residuals_inflate_calibration_term():

@@ -10,7 +10,6 @@ export default function MarginPanel({ project, res, onRecomputed, onProject }: P
     tol_cm: String(Math.round((us.distance_tolerance_m ?? 0.05) * 1000) / 10),
     px: String(us.click_tolerance_px ?? 0.5),
     height: us.drone_height_m != null ? String(us.drone_height_m) : "",
-    target: String(us.target_pct ?? 2),
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -24,7 +23,7 @@ export default function MarginPanel({ project, res, onRecomputed, onProject }: P
       const p = await api.patch(project.id, {
         uncertainty: {
           distance_tolerance_m: +f.tol_cm / 100, click_tolerance_px: +f.px,
-          drone_height_m: f.height.trim() === "" ? null : +f.height, target_pct: +f.target,
+          drone_height_m: f.height.trim() === "" ? null : +f.height,
         },
       });
       onProject(p);
@@ -36,8 +35,6 @@ export default function MarginPanel({ project, res, onRecomputed, onProject }: P
     <section className="panel">
       <div className="panel-head">
         <h3>Margin of error</h3>
-        {u && <span className={`tag ${u.n_over_target ? "warn" : "ok"}`}>
-          {u.n_over_target ? `${u.n_over_target} over ${u.target_pct} %` : `all within ${u.target_pct} %`}</span>}
       </div>
       {!u ? (
         <div className="banner info small">These results predate the margin of error. Press <b>Recompute speeds</b> to add it.</div>
@@ -62,8 +59,6 @@ export default function MarginPanel({ project, res, onRecomputed, onProject }: P
         <input type="number" step="any" min={0} value={f.px} onChange={(e) => setF({ ...f, px: e.target.value })} />
         <label title="Drone height above the road, from the flight log. Bounds the height-parallax bias.">Drone height m</label>
         <input type="number" step="any" min={0} value={f.height} placeholder="unknown" onChange={(e) => setF({ ...f, height: e.target.value })} />
-        <label title="Vehicles whose 95 % margin exceeds this share of their speed are flagged">Target ± %</label>
-        <input type="number" step="any" min={0} value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} />
       </div>
       <div className="row end">
         <button className="primary" disabled={busy} onClick={apply}>{busy ? "Recomputing…" : "Apply & recompute"}</button>

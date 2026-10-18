@@ -349,7 +349,7 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
     cols = ["track_id", "class", "direction", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
             "path_length_m", "chord_m", "speed_kmh", "speed_avg_u_kmh", "speed_avg_u_lower_kmh",
             "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
-            "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct", "u_over_target",
+            "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct",
             "t_max_s", "d_max_m", "speed_trend_pct", "speed_line_kmh", "disagreement_pct",
             "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags"]
     pd.DataFrame(results, columns=cols).to_csv(out / "results.csv", index=False, float_format="%.4f")

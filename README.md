@@ -149,8 +149,8 @@ Outputs in the project or `--out` folder: `tracks.parquet`, `transforms.npz`,
 
 ## How the margin of error is computed
 
-Every vehicle gets a declared margin, shown as `61.3 ±1.1 km/h` in the table, the
-speed profile and (optionally) the render panel. Hover a value for its breakdown.
+Every vehicle gets a declared margin, shown in the table, the speed profile and
+(optionally, in km/h) the render panel. Hover a value for its breakdown.
 It is an expanded uncertainty at k = 2 (about 95 %): independent terms, each a
 standard uncertainty, combined root-sum-square and doubled.
 
@@ -163,8 +163,8 @@ standard uncertainty, combined root-sum-square and doubled.
 | Height parallax | **Not corrected.** The tracked box centre sits h above the road (car ~0.8 m, bus ~1.5 m), so on the ground plane it moves H/(H−h) times faster than the vehicle. With the drone height H entered, this one-sided bias widens only the lower side: `61.3 +1.1 −1.9`. Without it, parallax isn't in the margin, and the UI says so. | +0.8 % car at 100 m, +3 % bus at 50 m |
 | Timing, stabilization | Not budgeted: frame timing from `capture_fps` and the stabilization residuals are far below the terms above. | < 0.1 % |
 
-Vehicles whose margin exceeds the target (default ±2 %) are flagged with ⚠. The
-inputs (distance tolerance, click precision, drone height, target) are set per
+In the app each vehicle's speed carries its margin as a share of the speed, e.g.
+`54.6 (±2.4 %)`. The inputs (distance tolerance, click precision, drone height) are set per
 project on the Results screen. **Apply & recompute** refreshes the margins
 without re-detecting. `results.csv` and `results.json` carry `speed_max_u_kmh`,
 `speed_avg_u_kmh`, the `*_u_lower_kmh` variants and the per-term breakdown.

@@ -35,7 +35,6 @@ tr.selected td { background: var(--accent-soft); }
 
 /* margin of error */
 td .pm, .pm { margin-left: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.u-flag { color: var(--warning); font-weight: 600; }
 .margin-kv { margin-bottom: var(--s-3); }
 .table-wrap.validation-wrap { margin-bottom: var(--s-3); border-bottom: 1px solid var(--border); border-radius: 0; }
 table.validation td { padding-top: 3px; padding-bottom: 3px; }

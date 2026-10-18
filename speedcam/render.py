@@ -156,7 +156,7 @@ class Pills:
 
 # -- side panel -----------------------------------------------------------------------------
 def margin_text(v: dict, key: str) -> str:
-    """'±1.1', or '+0.5 −1.4' when an uncorrected one-sided parallax bias widens the lower side."""
+    """'±1.1', or '+0.5 −1.4' (km/h) when an uncorrected one-sided parallax bias widens the lower side."""
     u, lo = v[f"speed_{key}_u_kmh"], v.get(f"speed_{key}_u_lower_kmh", v[f"speed_{key}_u_kmh"])
     return f"±{u:.1f}" if lo - u < 0.05 else f"+{u:.1f} −{lo:.1f}"
 

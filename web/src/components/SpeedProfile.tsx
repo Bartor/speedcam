@@ -55,8 +55,7 @@ export default function SpeedProfile({ v, limit, tNow }: Props) {
         <div className="sprof-kpi" title={marginBreakdown(v, "max")}>
           <span className="sprof-kpi-label">Max</span>
           <span className={`sprof-kpi-val ${above ? "bad-text" : ""}`}>{fmt(v.speed_max_kmh)}</span>
-          <span className="sprof-kpi-unit">km/h {margin(v, "max") ?? (sig ? `±${(2 * sig).toFixed(1)} noise` : "")}
-            {v.u_over_target && <span className="u-flag" aria-label="margin over the accuracy target"> ⚠</span>}</span>
+          <span className="sprof-kpi-unit">km/h {margin(v, "max") ?? (sig ? `±${(2 * sig).toFixed(1)} noise` : "")}</span>
         </div>
         <div className="sprof-kpi" title={marginBreakdown(v, "avg")}>
           <span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">{fmt(v.speed_kmh)}</span>
