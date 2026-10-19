@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Calibration, CalibrationResult, fmt, Project, useDebounced, useVideoFrame } from "../api";
+import { api, Calibration, CalibrationResult, fmt, MotionPath, PATH_COLORS, Project, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onNext: () => void }
@@ -11,6 +11,7 @@ const TOOLS: { key: Tool; label: string; hint: string; group: ToolGroup; color?:
   { key: "rect", group: "cal", color: "#ff8c3a", label: "Rectangle", hint: "Click 4 ground corners of a known rectangle in order around it (e.g. lane width × marking spacing), then type both edge lengths. Gives a homography: required for oblique views." },
   { key: "segment", group: "cal", color: "#f5c518", line: true, label: "Distance", hint: "Click two ground points, then type the measured distance (m)." },
   { key: "point", group: "cal", color: "#ff8c3a", label: "Control pt", hint: "Click a ground point with known world coordinates (m). 4+ points give a full homography." },
+  { key: "path", group: "lines", color: "#00c8ff", line: true, label: "Path", hint: "Click points along a road in the direction of travel (A → B); Enter or double-click to finish. Draw one per road (e.g. at an intersection). Vehicles inside the corridor are measured along the curve; replaces lines A/B." },
   { key: "lineA", group: "lines", color: "#00c8ff", line: true, label: "Line A", hint: "Click two points across the road for measurement line A." },
   { key: "lineB", group: "lines", color: "#ff3cc8", line: true, label: "Line B", hint: "Click two points across the road for measurement line B." },
   { key: "roi", group: "area", color: "#4cd97b", label: "ROI", hint: "Click polygon corners; close with Enter, double-click or by clicking the first point." },
@@ -88,14 +89,22 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
   };
 
   const setReference = (n: number) => {
-    const has = cal.segments.length || cal.points.length || cal.line_a || cal.line_b || cal.roi;
+    const has = cal.segments.length || cal.points.length || cal.line_a || cal.line_b || cal.roi || cal.paths?.length;
     if (has && n !== cal.reference_frame &&
       !confirm("Changing the reference frame: existing points were clicked on the old frame. Keep them anyway? (The drone may have drifted.)")) return;
     update({ ...cal, reference_frame: n });
   };
 
   const segRes = (i: number) => result.residuals?.filter((r) => r.kind === "segment")[cal.segments.slice(0, i + 1).filter((s) => s.meters > 0).length - 1];
-  const ready = !!(cal.line_a && cal.line_b && !result.error && result.fit_ok !== false);
+  const paths = cal.paths ?? [];
+  const hasPath = paths.some((p) => p.points.length >= 2);
+  const setPath = (k: number, patch: Partial<MotionPath> | null) => {
+    const c = structuredClone(cal);
+    if (patch === null) c.paths!.splice(k, 1);
+    else c.paths![k] = { ...c.paths![k], ...patch };
+    update(c);
+  };
+  const ready = !!((hasPath || (cal.line_a && cal.line_b)) && !result.error && result.fit_ok !== false);
   const hint = TOOLS.find((t) => t.key === tool)!.hint;
 
   return (
@@ -125,6 +134,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           onSegmentAdded={(i) => { setFocusSeg(i); setTool("move"); }}
           onPolygonAdded={() => { setTool("move"); setTimeout(() => polyInputs.current[0]?.focus(), 0); }}
           onRectAdded={() => { setTool("move"); setTimeout(() => rectW.current?.focus(), 0); }} lineGapM={result.line_gap_m}
+          pathsDraw={result.paths} onPathAdded={() => setTool("move")}
           selected={focusSeg !== null ? { kind: "seg", i: focusSeg } : null} />
         <div className="scrubber">
           {project.status.proxy_mp4 ? (
@@ -159,7 +169,12 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
                 <tr><td>Scale</td><td>{fmt(result.cm_per_px, 3)} cm/px</td></tr>
                 <tr><td>Residual RMS</td><td>{fmt((result.rms_m ?? 0) * 100, 1)} cm</td></tr>
                 <tr><td>Max rel. error</td><td className={(result.max_rel_error ?? 0) > 0.01 ? "bad-text" : ""}>{fmt((result.max_rel_error ?? 0) * 100, 2)} %</td></tr>
-                <tr><td>Line gap A–B</td><td>{result.line_gap_m ? `${result.line_gap_m.toFixed(2)} m` : "–"}</td></tr>
+                {result.paths && result.paths.length > 0 ? (
+                  <tr><td>Measured along</td><td>{result.paths.length === 1 ? `${result.paths[0].measured_m.toFixed(1)} m of path`
+                    : `${result.paths.length} paths · ${result.paths.map((q) => q.measured_m.toFixed(0)).join(" + ")} m`}</td></tr>
+                ) : (
+                  <tr><td>Line gap A–B</td><td>{result.line_gap_m ? `${result.line_gap_m.toFixed(2)} m` : "–"}</td></tr>
+                )}
               </tbody>
             </table>
           )}
@@ -265,6 +280,42 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
+          <h3>Paths of motion {paths.length > 0 && <span className="muted small">({paths.length})</span>}</h3>
+          {paths.map((pp, k) => {
+            const dr = result.paths?.[k];
+            return (
+              <div key={k} className="path-item">
+                <div className="item-row">
+                  <span className="swatch" style={{ background: PATH_COLORS[k % PATH_COLORS.length] }} />
+                  <input className="grow path-name" value={pp.name} onChange={(e) => setPath(k, { name: e.target.value })} title="Name, e.g. the road" />
+                  <button className="x" title="Remove this path" onClick={() => setPath(k, null)}>✕</button>
+                </div>
+                <div className="item-row small">
+                  <span className="grow muted">{dr ? `${dr.measured_m.toFixed(1)} m measured${dr.length_m - dr.measured_m > 1 ? ` of ${dr.length_m.toFixed(0)} m` : ""}` : `${pp.points.length} points`}</span>
+                  <span title="Vehicles further than this from the path (either side) are ignored">± </span>
+                  <input type="number" step="0.5" min={0.5} className="narrow" value={pp.corridor_m}
+                    onChange={(e) => setPath(k, { corridor_m: Math.max(0.5, parseFloat(e.target.value) || 6) })} />
+                  <span className="muted">m</span>
+                  <button className="ghost" title="Swap which end is A" onClick={() => setPath(k, { points: [...pp.points].reverse() })}>A ↔ B</button>
+                </div>
+              </div>
+            );
+          })}
+          {hasPath ? (
+            <>
+              <label className="small item-row">
+                <input type="checkbox" checked={cal.path_clip_to_calibration !== false}
+                  onChange={(e) => update({ ...cal, path_clip_to_calibration: e.target.checked })} />
+                <span>Only measure inside the calibrated area (recommended)</span>
+              </label>
+              <p className="muted small">Each vehicle is measured on the path it covers most, over all of it inside the corridor, corrected for its lane on bends. Lines A/B are ignored while paths exist. Dashed = outside the calibrated area.</p>
+            </>
+          ) : (
+            <p className="muted small">Instead of lines A and B, draw one or more paths with the <b>Path</b> tool, e.g. one per road of an intersection. Speeds are measured along the whole curve.</p>
+          )}
+        </section>
+
+        <section className="panel">
           <h3>Measurement lines & ROI</h3>
           {(["line_a", "line_b"] as const).map((k) => (
             <div key={k} className="item-row">
@@ -285,7 +336,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </div>
         <div className="cal-foot">
           <button className="primary wide lg" disabled={!ready} onClick={onNext}>Continue to processing →</button>
-          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (rectangle, distance or control points) and both lines."}</p>}
+          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (polygon, rectangle, distances or control points) and a path or both lines."}</p>}
         </div>
       </aside>
     </div>

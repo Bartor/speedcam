@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calibration, Pt } from "../api";
+import { Calibration, PATH_COLORS, PathDraw, Pt } from "../api";
 
-export type Tool = "move" | "polygon" | "rect" | "segment" | "lineA" | "lineB" | "roi" | "point";
+export type Tool = "move" | "path" | "polygon" | "rect" | "segment" | "lineA" | "lineB" | "roi" | "point";
 
 /** Tools that collect an open-ended list of corners, closed with Enter / double-click / first point. */
-const MIN_CORNERS: Partial<Record<Tool, number>> = { roi: 3, polygon: 4 };
+const MIN_CORNERS: Partial<Record<Tool, number>> = { roi: 3, polygon: 4, path: 2 };
 
 /** Four control points with world coords (0,0) (W,0) (W,L) (0,L): a rectangle calibration. */
 export function rectDims(cal: Calibration): { w: number; l: number } | null {
@@ -20,6 +20,7 @@ type Handle =
   | { kind: "line"; which: "line_a" | "line_b"; end: 0 | 1 }
   | { kind: "roi"; i: number }
   | { kind: "poly"; i: number }
+  | { kind: "path"; k: number; i: number }
   | { kind: "pt"; i: number };
 
 interface Props {
@@ -31,13 +32,16 @@ interface Props {
   onRectAdded?: () => void;
   onPolygonAdded?: () => void;
   lineGapM?: number | null;
+  /** per path: smooth curve, measured part and corridor edges as computed by the server (reference px) */
+  pathsDraw?: PathDraw[];
+  onPathAdded?: (index: number) => void;
   selected?: { kind: string; i: number } | null;
 }
 
-const COLORS = { poly: "#b98cff", seg: "#f5c518", a: "#00c8ff", b: "#ff3cc8", roi: "#4cd97b", pt: "#ff8c3a", pending: "#ff5050" };
+const COLORS = { path: "#00c8ff", poly: "#b98cff", seg: "#f5c518", a: "#00c8ff", b: "#ff3cc8", roi: "#4cd97b", pt: "#ff8c3a", pending: "#ff5050" };
 const NEEDED: Partial<Record<Tool, number>> = { rect: 4, segment: 2, lineA: 2, lineB: 2, point: 1 };
 
-export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, selected }: Props) {
+export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, pathsDraw, onPathAdded, selected }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -98,6 +102,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     });
     cal.roi?.forEach((p, i) => out.push({ h: { kind: "roi", i }, p }));
     cal.polygon?.points.forEach((p, i) => out.push({ h: { kind: "poly", i }, p }));
+    cal.paths?.forEach((pp, k) => pp.points.forEach((p, i) => out.push({ h: { kind: "path", k, i }, p })));
     cal.points.forEach((c, i) => out.push({ h: { kind: "pt", i }, p: c.px }));
     return out;
   };
@@ -108,6 +113,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     else if (h.kind === "line") c[h.which]![h.end] = p;
     else if (h.kind === "roi") c.roi![h.i] = p;
     else if (h.kind === "poly") c.polygon!.points[h.i] = p;
+    else if (h.kind === "path") c.paths![h.k].points[h.i] = p;
     else c.points[h.i].px = p;
     return c;
   };
@@ -135,14 +141,21 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     } else if (tool === "lineA") { c.line_a = [pts[0], pts[1]]; onChange(c); }
     else if (tool === "lineB") { c.line_b = [pts[0], pts[1]]; onChange(c); }
     else if (tool === "point") { c.points.push({ px: pts[0], world: [0, 0] }); onChange(c); }
-    else if (tool === "roi" || tool === "polygon") {
+    else if (tool === "roi" || tool === "polygon" || tool === "path") {
       // a double-click adds two near-identical points before closing: drop them
       const clean = pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 2);
       if (clean.length >= MIN_CORNERS[tool]!) {
         if (tool === "roi") c.roi = clean;
+        else if (tool === "path") {
+          const list = c.paths ?? [];
+          let n = list.length + 1;
+          while (list.some((p) => p.name === `Path ${n}`)) n++;
+          c.paths = [...list, { name: `Path ${n}`, points: clean, corridor_m: 6 }];
+        }
         else c.polygon = { points: clean, distances: clean.map((_, i) => ({ i, j: (i + 1) % clean.length, meters: 0 })) };
         onChange(c);
         if (tool === "polygon") onPolygonAdded?.();
+        if (tool === "path") onPathAdded?.(c.paths!.length - 1);
       }
     }
     setPending([]);
@@ -168,7 +181,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     }
     const p = toImage(sx, sy);
     if (corners) {
-      if (pending.length >= corners) {
+      if (pending.length >= corners && tool !== "path") {
         const [fx, fy] = toScreen(pending[0]);
         if (Math.hypot(fx - sx, fy - sy) < 10) return commit(pending);
       }
@@ -264,6 +277,27 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
       dot(s.a, COLORS.seg); dot(s.b, COLORS.seg);
       label([(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2], s.meters > 0 ? `${s.meters} m` : `S${i + 1}: enter m`, COLORS.seg);
     });
+    const polyline = (P: Pt[], color: string, w: number, dash: number[] = []) => {
+      ctx.setLineDash(dash); ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+      P.forEach((p, i) => { const [x, y] = toScreen(p); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.stroke(); ctx.setLineDash([]);
+    };
+    (cal.paths ?? []).forEach((pp, k) => {
+      const pts = pp.points;
+      if (!pts.length) return;
+      const color = PATH_COLORS[k % PATH_COLORS.length];
+      const dr = pathsDraw?.[k];
+      dr?.corridor_px?.forEach((e) => polyline(e, "rgba(255,255,255,.5)", 1.25, [6, 5]));
+      if (dr?.px && dr.px.length > 1) {
+        polyline(dr.px, color, 1.5, [4, 6]);  // whole curve; the measured part is drawn solid on top
+        if (dr.trusted_px && dr.trusted_px.length > 1) polyline(dr.trusted_px, color, 3);
+      } else {
+        polyline(pts, color, 3);
+      }
+      pts.forEach((p) => dot(p, color, 4));
+      label(pts[0], `A · ${pp.name}`, color);
+      if (pts.length > 1) label(pts[pts.length - 1], dr ? `B · ${dr.measured_m.toFixed(1)} m measured` : "B", color);
+    });
     if (cal.polygon && cal.polygon.points.length) {
       const P = cal.polygon.points;
       const n = P.length;
@@ -307,7 +341,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
       const color = COLORS.pending;
       pending.forEach((p, i) => { dot(p, color); if (i) line(pending[i - 1], p, color, 1.5); });
       if (m.inside) line(pending[pending.length - 1], cursor, color, 1, [5, 4]);
-      if ((MIN_CORNERS[tool] || tool === "rect") && pending.length >= 2 && m.inside) line(cursor, pending[0], color, 1, [2, 4]);
+      if (((MIN_CORNERS[tool] && tool !== "path") || tool === "rect") && pending.length >= 2 && m.inside) line(cursor, pending[0], color, 1, [2, 4]);
     }
 
     // loupe for precise placement

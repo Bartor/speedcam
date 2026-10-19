@@ -14,6 +14,7 @@ type SortKey = keyof Vehicle;
 const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "track_id", label: "#" },
   { key: "class", label: "Class" },
+  { key: "path", label: "Path" },
   { key: "direction", label: "Dir" },
   { key: "t_entry_s", label: "Entry s", d: 2 },
   { key: "dt_s", label: "Δt s", d: 3 },
@@ -30,6 +31,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   const [res, setRes] = useState<Results | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [dir, setDir] = useState<"all" | "A->B" | "B->A">("all");
+  const [road, setRoad] = useState<string>("all");
   const [validOnly, setValidOnly] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: "t_entry_s", asc: true });
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
@@ -71,19 +73,24 @@ export default function ResultsScreen({ project, onChanged }: Props) {
 
   const rows = useMemo(() => {
     if (!res) return [];
-    const r = res.vehicles.filter((v) => (dir === "all" || v.direction === dir) && (!validOnly || v.valid));
+    const r = res.vehicles.filter((v) => (dir === "all" || v.direction === dir) && (!validOnly || v.valid) &&
+      (road === "all" || v.path === road));
     return [...r].sort((a, b) => {
       const x = a[sort.key], y = b[sort.key];
       const c = typeof x === "number" ? (x as number) - (y as number) : String(x).localeCompare(String(y));
       return sort.asc ? c : -c;
     });
-  }, [res, dir, validOnly, sort]);
+  }, [res, dir, validOnly, sort, road]);
 
   const useMax = metric === "max" && !!res?.stats_max;
+  const roads = Object.keys(res?.by_path ?? {});
+  const cols = COLS.filter((c) => c.key !== "path" || roads.length > 0);
   const stats: Stats | undefined = res
-    ? (useMax ? (dir === "all" ? res.stats_max : res.by_direction_max?.[dir]) : (dir === "all" ? res.stats : res.by_direction[dir]))
+    ? (road !== "all" && res.by_path?.[road]
+      ? (useMax ? res.by_path[road].max : res.by_path[road].avg)
+      : useMax ? (dir === "all" ? res.stats_max : res.by_direction_max?.[dir]) : (dir === "all" ? res.stats : res.by_direction[dir]))
     : undefined;
-  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (dir === "all" || v.direction === dir))
+  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (road !== "all" ? v.path === road : dir === "all" || v.direction === dir))
     .map((v) => (useMax ? v.speed_max_kmh : v.speed_kmh)) : [];
   // profile shown: the clicked vehicle, else the fastest valid one
   const fastest = res?.vehicles.filter((v) => v.valid).sort((a, b) => b.speed_max_kmh - a.speed_max_kmh)[0];
@@ -151,13 +158,19 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             <div className="seg-ctl">
               {(["all", "A->B", "B->A"] as const).map((d) => <button key={d} className={dir === d ? "active" : ""} onClick={() => setDir(d)}>{d === "all" ? "All" : d.replace("->", " → ")}</button>)}
             </div>
+            {roads.length > 0 && (
+              <select value={road} onChange={(e) => setRoad(e.target.value)} title="Path of motion (road)">
+                <option value="all">All paths</option>
+                {roads.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            )}
             <label className="small"><input type="checkbox" checked={validOnly} onChange={(e) => setValidOnly(e.target.checked)} /> valid only</label>
           </div>
           <div className="table-wrap">
             <table className="vehicles">
               <thead>
                 <tr>
-                  {COLS.map((c) => (
+                  {cols.map((c) => (
                     <th key={c.key} title={c.title} aria-sort={sort.key === c.key ? (sort.asc ? "ascending" : "descending") : undefined}
                       className={`${c.d !== undefined || c.key === "track_id" ? "num" : ""}${sort.key === c.key ? " sorted" : ""}`}
                       onClick={() => setSort({ key: c.key, asc: sort.key === c.key ? !sort.asc : true })}>
@@ -173,7 +186,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                   return (
                     <tr key={v.track_id} className={`${active ? "active" : ""} ${v.valid ? "" : "invalid"} ${shown?.track_id === v.track_id ? "selected" : ""}`}
                       onClick={() => { setSelected(v.track_id); seekTo(v); }}>
-                      {COLS.map((c) => {
+                      {cols.map((c) => {
                         const x = v[c.key];
                         const mk = c.key === "speed_max_kmh" ? "max" : c.key === "speed_kmh" ? "avg" : null;
                         const pm = mk && margin(v, mk);
@@ -211,7 +224,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         <section className="panel">
           <div className="panel-head">
             <h3>Speed statistics</h3>
-            {dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
+            {road !== "all" ? <span className="tag">{road}</span> : dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
             <span className="grow" />
             {res.stats_max && (
               <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
@@ -224,7 +237,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             <div className="banner warn small calib-check"><b>Check the calibration.</b> {res.calibration_check.message}</div>
           )}
           <div className="tiles">
-            <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
+            <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${road !== "all" ? res.vehicles.filter((v) => v.path === road).length
+              : dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
             <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
               note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ sample sufficient" : `✕ need ${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2 vehicles"}
               tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />

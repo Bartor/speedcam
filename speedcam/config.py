@@ -47,6 +47,14 @@ class Polygon(BaseModel):
     distances: list[PolygonDistance] = Field(default_factory=list)
 
 
+class MotionPath(BaseModel):
+    """A curve along which traffic moves: points in reference px, in the direction called A->B."""
+
+    name: str = "Path"
+    points: list[Pt] = Field(default_factory=list)
+    corridor_m: float = 6.0  # half-width of the corridor around the path, metres
+
+
 class Calibration(BaseModel):
     reference_frame: int = 0
     segments: list[Segment] = Field(default_factory=list)
@@ -55,6 +63,13 @@ class Calibration(BaseModel):
     line_a: Optional[tuple[Pt, Pt]] = None
     line_b: Optional[tuple[Pt, Pt]] = None
     roi: Optional[list[Pt]] = None
+    # Paths of motion (e.g. one per road of an intersection). When any is set they replace lines
+    # A/B: each vehicle is measured along the path it covers most, over all of it inside the corridor.
+    paths: list["MotionPath"] = Field(default_factory=list)
+    # Only measure on the part of the path inside the calibrated area (outline of the calibration
+    # points, plus this margin): far from where it was measured a calibration is extrapolated.
+    path_clip_to_calibration: bool = True
+    path_calibration_margin_m: float = 5.0
 
 
 class DetectionSettings(BaseModel):
@@ -153,6 +168,8 @@ class SpeedSettings(BaseModel):
     # 0.5 s ~ +-0.18 km/h (max unbiased, +0.02); box centres alone: +-0.57 / +-0.29.
     momentary_window_s: float = 0.5
     line_extend: float = 0.1
+    # path mode: a vehicle must cover at least this much of the path (or half of it, if shorter)
+    path_min_cover_m: float = 10.0
 
 
 class RenderSettings(BaseModel):
@@ -164,6 +181,7 @@ class RenderSettings(BaseModel):
     encoder: Literal["auto", "nvenc", "videotoolbox", "x264"] = "auto"
     quality: int = 20
     trail_s: float = 1.0
+    label_hold_s: float = 2.5  # how long a vehicle keeps its "max" label after finishing
     speed_limit_kmh: float = 50.0
     # presentation (social media): side panel listing every vehicle's max speed as it finishes
     panel: Literal["none", "right", "left"] = "right"

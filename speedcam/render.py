@@ -33,6 +33,8 @@ WHITE = (255, 255, 255)
 MUTED = (160, 166, 176)
 INK = (14, 16, 20)
 LINE_A, LINE_B = (0, 200, 255), (255, 60, 200)
+# paths of motion: distinct from the green/amber/red used for speeds
+PATH_COLORS = [(0, 200, 255), (185, 140, 255), (255, 60, 200), (120, 230, 255), (255, 210, 120)]
 GOOD, WARN, BAD, INVALID = (46, 204, 113), (255, 176, 32), (235, 64, 52), (150, 150, 160)
 
 
@@ -172,6 +174,7 @@ class Panel:
         self.opaque = opaque
         self.k = self.H / 1080
         self.items = sorted([r for r in results if r["valid"]], key=lambda r: r["t_exit_s"])
+        self.many_paths = len({r.get("path") for r in results if r.get("path")}) > 1
         self._key = None
         self._layer = None
 
@@ -270,7 +273,8 @@ class Panel:
             tx = x + int(16 * k)
             d.text((tx, y + int(10 * k)), v["class"].capitalize(), font=f("bold", int(20 * k)), fill=WHITE, anchor="lt")
             mm, ss = divmod(int(v["t_exit_s"]), 60)
-            d.text((tx, y + row_h - int(14 * k)), f"{v['direction'].replace('->', ' → ')}  ·  {mm}:{ss:02d}",
+            where = f"{v['path']} " if v.get("path") and self.many_paths else ""
+            d.text((tx, y + row_h - int(14 * k)), f"{where}{v['direction'].replace('->', ' → ')}  ·  {mm}:{ss:02d}",
                    font=f("regular", int(15 * k)), fill=MUTED, anchor="lb")
             rx = x + inner
             d.text((rx, y + int(6 * k)), "km/h", font=f("bold", int(14 * k)), fill=MUTED, anchor="rt")
@@ -403,6 +407,43 @@ class Overlay:
         layer, (w, h) = self.pills.make(big, small, fill, ink, opacity)
         _blend(frame, int(x - (w / 2 if center else 0)), int(y - h), layer)
 
+    def _dashed(self, frame, pts, color, width, on=5, period=8) -> None:
+        p = pts.astype(np.int32)
+        for a in range(0, len(p) - 1, period):
+            cv2.polylines(frame, [p[a:a + on]], False, color, width, cv2.LINE_AA)
+
+    def _draw_paths(self, frame, to_disp) -> None:
+        """Paths of motion: each curve in its own colour (measured part solid, extrapolated part
+        dashed), its corridor edges, and A/B tags just beyond the measured part's ends."""
+        many = len(self.cal.path_geoms) > 1
+        placed: list[tuple[float, float, float, float]] = []  # tag boxes so far, to avoid overlaps
+        for k, (g, d) in enumerate(zip(self.cal.path_geoms, self.cal.paths_px)):
+            color = PATH_COLORS[k % len(PATH_COLORS)]
+            for edge in d["corridor_px"]:
+                self._dashed(frame, transform_points(to_disp, edge), (200, 200, 200), max(1, self.lw - 1))
+            self._dashed(frame, transform_points(to_disp, d["px"]), bgr(color), self.lw, on=4, period=10)
+            if d["trusted_px"] is None:
+                continue
+            p = transform_points(to_disp, d["trusted_px"])
+            cv2.polylines(frame, [p.astype(np.int32)], False, bgr(color), self.lw + 1, cv2.LINE_AA)
+            measured = g.hi - g.lo
+            for name, end, prev in (("A", p[0], p[min(8, len(p) - 1)]), ("B", p[-1], p[max(-9, -len(p))])):
+                out = end - prev
+                out = out / max(np.linalg.norm(out), 1e-6)
+                if name == "A":
+                    small = g.name if many else ""
+                else:
+                    small = f"{measured:.1f} m" + (f" · {g.name}" if many else " path")
+                _, (pw_, ph_) = self.pills.make(name, small, color, INK, 0.95)
+                c = end + out * (0.5 * abs(out[0]) * pw_ + 0.5 * abs(out[1]) * ph_ + 8 * self.k)
+                for _ in range(8):  # parallel paths end close together: step further out until clear
+                    box = (c[0] - pw_ / 2, c[1] - ph_ / 2, c[0] + pw_ / 2, c[1] + ph_ / 2)
+                    if not any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in placed):
+                        break
+                    c = c + out * (abs(out[0]) * pw_ + abs(out[1]) * ph_ + 6 * self.k)
+                placed.append((c[0] - pw_ / 2, c[1] - ph_ / 2, c[0] + pw_ / 2, c[1] + ph_ / 2))
+                self._pill(frame, c[0], c[1] + ph_ / 2, name, small, color, INK, 0.95, center=True)
+
     def draw(self, frame: np.ndarray, n: int) -> np.ndarray:
         T = self.T_at(n)
         if self.rs.mode == "stabilized":
@@ -418,7 +459,10 @@ class Overlay:
 
         # measurement lines, with the measured section length between them
         gap = self.cal.line_gap_m
-        for name, line, color in (("A", cal.line_a, LINE_A), ("B", cal.line_b, LINE_B)):
+        if self.cal.path_geoms:
+            self._draw_paths(frame, to_disp)
+        for name, line, color in ((("A", cal.line_a, LINE_A), ("B", cal.line_b, LINE_B))
+                                  if not self.cal.path_geoms else ()):
             if not line:
                 continue
             p = transform_points(to_disp, np.array(line, float))
@@ -445,7 +489,8 @@ class Overlay:
                 if t >= r.t_second:
                     vmax = res.get("speed_max_kmh", res["speed_kmh"])
                     color = speed_rgb(vmax, limit) if res["valid"] else INVALID
-                    label = (f"{vmax:.1f}" + ("" if res["valid"] else "?"), "km/h max", color, INK)
+                    if t - r.t_second <= self.rs.label_hold_s:  # then just the coloured box: less clutter
+                        label = (f"{vmax:.1f}" + ("" if res["valid"] else "?"), "km/h max", color, INK)
                 elif t > r.t_first:
                     kk = n - r.frames[0]
                     v = r.inst_kmh[kk] if 0 <= kk < len(r.inst_kmh) else np.nan
@@ -480,7 +525,8 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     tracks = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
-    results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                           paths=cal.path_geoms)
     if rs.panel != "none" and rs.show_margin:
         margin_of_error(cfg, results, renders, cal, fps)
     tf = np.load(out / "transforms.npz")
@@ -559,7 +605,8 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     tracks = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
-    _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                           paths=cal.path_geoms)
     tf = np.load(out / "transforms.npz")
     T_inv = np.linalg.inv(tf["T"]) if len(tf["T"]) else np.zeros((0, 3, 3))
     H_inv = np.linalg.inv(cal.H)
@@ -586,6 +633,10 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     return {
         "width": info.width, "height": info.height, "capture_fps": fps, "container_fps": info.container_fps,
         "line_a": cfg.calibration.line_a, "line_b": cfg.calibration.line_b, "roi": cfg.calibration.roi,
+        "paths": [{"name": g.name, "measured_m": g.hi - g.lo, "px": r1(d["px"]),
+                   "trusted_px": None if d["trusted_px"] is None else r1(d["trusted_px"]),
+                   "corridor_px": [r1(e) for e in d["corridor_px"]]}
+                  for g, d in zip(cal.path_geoms, cal.paths_px)],
         "line_gap_m": cal.line_gap_m, "speed_limit_kmh": cfg.render.speed_limit_kmh,
         "trail_frames": int(round(cfg.render.trail_s * fps)),
         "T_frames": tf["frames"].tolist(), "T_inv": np.round(T_inv.reshape(-1, 9), 7).tolist(),

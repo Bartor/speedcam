@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Pt } from "../api";
+import { PATH_COLORS, Pt } from "../api";
 
 export interface OverlayData {
   width: number; height: number; capture_fps: number; container_fps: number;
   line_a: [Pt, Pt] | null; line_b: [Pt, Pt] | null; roi: Pt[] | null; line_gap_m: number | null;
+  paths?: { name: string; measured_m: number; px: number[]; trusted_px: number[] | null; corridor_px: [number[], number[]] }[];
   speed_limit_kmh: number; trail_frames: number;
   T_frames: number[]; T_inv: number[][];
   det_frame: number[]; det_tid: number[]; det_corners: number[];
@@ -66,8 +67,26 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
       data.roi.forEach(([x, y], i) => { const [a, b] = P(x, y); if (i) ctx.lineTo(a, b); else ctx.moveTo(a, b); });
       ctx.closePath(); ctx.strokeStyle = "rgba(160,160,160,.7)"; ctx.lineWidth = 1; ctx.stroke();
     }
+    const many = (data.paths?.length ?? 0) > 1;
+    data.paths?.forEach((pp, k) => {
+      // flat [x, y, x, y, ...] in reference px
+      const poly = (flat: number[], color: string, w: number, dash: number[] = []) => {
+        ctx.setLineDash(dash); ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+        for (let i = 0; i < flat.length; i += 2) { const p = P(flat[i], flat[i + 1]); if (i) ctx.lineTo(...p); else ctx.moveTo(...p); }
+        ctx.stroke(); ctx.setLineDash([]);
+      };
+      const color = PATH_COLORS[k % PATH_COLORS.length];
+      pp.corridor_px.forEach((e) => poly(e, "rgba(255,255,255,.45)", 1, [6, 5]));
+      poly(pp.px, color, 1.5, [4, 6]);
+      const m = pp.trusted_px;
+      if (!m || m.length < 4) return;
+      poly(m, color, 2.5);
+      const a = P(m[0], m[1]), b = P(m[m.length - 2], m[m.length - 1]);
+      label(a[0] + 6, a[1] - 6, many ? `A · ${pp.name}` : "A", color);
+      label(b[0] + 6, b[1] - 6, `B  ${pp.measured_m.toFixed(1)} m`, color);
+    });
     ([["A", data.line_a, LINE_A], ["B", data.line_b, LINE_B]] as const).forEach(([name, l, color]) => {
-      if (!l) return;
+      if (!l || (data.paths?.length ?? 0) > 0) return;
       const [a, b] = [P(...l[0]), P(...l[1])];
       ctx.strokeStyle = color; ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();

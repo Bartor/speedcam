@@ -27,7 +27,7 @@ OUTPUT_FILES = {"proxy.mp4", "render.mp4", "results.csv", "results.json", "track
                 "stabilization.csv", "render.json", "validation.json"}
 SCREENS = {"import", "calibrate", "process", "results"}
 FRAME_CACHE_MAX = 400  # decoded full-res frames kept on disk per project
-OVERLAY_VERSION = 2  # bump when overlay_data() output changes, so cached copies are rebuilt
+OVERLAY_VERSION = 4  # bump when overlay_data() output changes, so cached copies are rebuilt
 
 
 class ProjectStore:
@@ -116,8 +116,8 @@ class ProjectStore:
         }
         try:
             res = calib.compute(ProjectConfig.model_validate(cfg).calibration)
-            row["calibrated"] = int(res.fit_ok and bool(cfg["calibration"].get("line_a")) and
-                                    bool(cfg["calibration"].get("line_b")))
+            row["calibrated"] = int(res.fit_ok and calib.has_measurement_geometry(
+                ProjectConfig.model_validate(cfg).calibration))
         except ValueError:
             row["calibrated"] = 0
         if st["results_json"]:

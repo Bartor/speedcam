@@ -17,6 +17,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .config import Calibration, Polygon
+from .path import PathGeom
 
 
 @dataclass
@@ -32,6 +33,9 @@ class CalibrationResult:
     line_b_world: Optional[np.ndarray] = None
     warnings: list[str] = field(default_factory=list)
     fit_ok: bool = True
+    path_geoms: list[PathGeom] = field(default_factory=list)
+    # per path, for drawing (reference px): smooth curve, measured part, corridor edges
+    paths_px: list[dict] = field(default_factory=list)
 
     def summary(self) -> dict:
         return {
@@ -45,7 +49,20 @@ class CalibrationResult:
             "H": self.H.tolist(),
             "warnings": self.warnings,
             "fit_ok": self.fit_ok,
+            "paths": [{"name": g.name, "length_m": g.length, "measured_m": g.hi - g.lo,
+                       "px": _thin(d["px"]), "trusted_px": _thin(d["trusted_px"]),
+                       "corridor_px": [_thin(e) for e in d["corridor_px"]]}
+                      for g, d in zip(self.path_geoms, self.paths_px)],
         }
+
+
+def _thin(px: Optional[np.ndarray], n: int = 160) -> Optional[list]:
+    """At most ~n points of a pixel polyline, for drawing in the UI."""
+    if px is None:
+        return None
+    step = max(1, int(np.ceil(len(px) / n)))
+    keep = np.unique(np.r_[np.arange(0, len(px), step), len(px) - 1])
+    return np.round(px[keep], 1).tolist()
 
 
 # Above this, the mapping model clearly does not fit the clicked distances; analysis is refused.
@@ -220,6 +237,8 @@ def compute(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> C
     center = (image_size[0] / 2, image_size[1] / 2) if image_size else (0.0, 0.0)
     if cal.line_a:
         center = tuple(np.mean(np.array(cal.line_a + (cal.line_b or cal.line_a)), axis=0))
+    elif any(p.points for p in cal.paths):
+        center = tuple(np.mean(np.array([q for p in cal.paths for q in p.points], float), axis=0))
     res = CalibrationResult(
         H=H, method=method, m_per_px=local_scale(H, center), residuals=residuals,
         rms_m=float(np.sqrt(np.mean(errs ** 2))), max_rel_error=float(max(rels) if rels else 0.0),
@@ -237,4 +256,57 @@ def compute(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> C
         res.line_b_world = apply_h(H, cal.line_b)
     if res.line_a_world is not None and res.line_b_world is not None:
         res.line_gap_m = float(_gap_between(res.line_a_world, res.line_b_world))
+    hull = calibrated_area_world(cal, H) if cal.paths else None
+    H_inv = np.linalg.inv(H)
+    for mp in cal.paths:
+        if len(mp.points) < 2:
+            continue
+        g = PathGeom.from_world_points(apply_h(H, mp.points), mp.corridor_m, name=mp.name)
+        if cal.path_clip_to_calibration and hull is not None:
+            g.trust_within(hull, cal.path_calibration_margin_m)
+            outside = g.length - (g.hi - g.lo)
+            if g.hi - g.lo <= 0:
+                res.warnings.append(f"{mp.name} doesn't pass through the calibrated area, so nothing would be "
+                                    "measured on it. Calibrate where that traffic is, or draw the path there.")
+            elif outside > 1:
+                res.warnings.append(
+                    f"{mp.name}: {outside:.0f} m of its {g.length:.0f} m lies outside the calibrated area (more "
+                    f"than {cal.path_calibration_margin_m:g} m from your calibration points), where the "
+                    f"calibration would be extrapolated; speeds are measured on the remaining {g.hi - g.lo:.0f} m. "
+                    "Extend the calibration to measure further.")
+        px = apply_h(H_inv, g.pts)
+        inn = (g.s >= g.lo) & (g.s <= g.hi)
+        res.path_geoms.append(g)
+        res.paths_px.append({"px": px, "trusted_px": px[inn] if inn.sum() >= 2 else None,
+                             "corridor_px": (apply_h(H_inv, g.offset(mp.corridor_m)),
+                                             apply_h(H_inv, g.offset(-mp.corridor_m)))})
+    if len(res.path_geoms) == 1:
+        res.line_gap_m = res.path_geoms[0].hi - res.path_geoms[0].lo  # "the measured section"
+    elif res.path_geoms:
+        res.line_gap_m = None
     return res
+
+
+def calibrated_area_world(cal: Calibration, H: np.ndarray) -> Optional[np.ndarray]:
+    """Convex outline (ground m) of everything the calibration was measured on."""
+    import cv2
+
+    px: list = []
+    if cal.polygon:
+        px += list(cal.polygon.points)
+    px += [p.px for p in cal.points]
+    for sg in cal.segments:
+        px += [sg.a, sg.b]
+    if len(px) < 2:
+        return None
+    w = apply_h(H, np.array(px, float)).astype(np.float32)
+    if len(w) == 2:  # a single distance: a thin strip along it
+        d = w[1] - w[0]
+        n = np.array([-d[1], d[0]], np.float32) / max(float(np.linalg.norm(d)), 1e-6)
+        w = np.array([w[0] + n, w[1] + n, w[1] - n, w[0] - n], np.float32)
+    return cv2.convexHull(w).reshape(-1, 2)
+
+
+def has_measurement_geometry(cal: Calibration) -> bool:
+    """Lines A and B, or a path of motion."""
+    return bool((cal.line_a and cal.line_b) or any(len(p.points) >= 2 for p in cal.paths))

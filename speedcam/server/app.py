@@ -221,8 +221,8 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         cfg = store.config(pid)
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
-        if not (cfg.calibration.line_a and cfg.calibration.line_b):
-            raise HTTPException(400, "Draw measurement lines A and B first")
+        if not calib.has_measurement_geometry(cfg.calibration):
+            raise HTTPException(400, "Draw a path of motion, or lines A and B, first")
         try:
             res = calib.compute(cfg.calibration)
         except ValueError as e:
@@ -238,8 +238,8 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         cfg = store.config(pid)
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
-        if not (cfg.calibration.line_a and cfg.calibration.line_b):
-            raise HTTPException(400, "Draw measurement lines A and B first")
+        if not calib.has_measurement_geometry(cfg.calibration):
+            raise HTTPException(400, "Draw a path of motion, or lines A and B, first")
         n = frame if frame is not None else cfg.calibration.reference_frame
         return jobs.submit(pid, "preview", d, {"frame": n, "seconds": seconds}).public()
 

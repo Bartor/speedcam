@@ -6,8 +6,17 @@ export interface Segment { a: Pt; b: Pt; meters: number }
 export interface ControlPoint { px: Pt; world: Pt }
 export interface PolygonDistance { i: number; j: number; meters: number }
 export interface Polygon { points: Pt[]; distances: PolygonDistance[] }
+export interface MotionPath { name: string; points: Pt[]; corridor_m: number }
+export interface PathDraw {
+  name: string; length_m: number; measured_m: number;
+  px: Pt[] | null; trusted_px: Pt[] | null; corridor_px: [Pt[], Pt[]] | null;
+}
+/** One colour per path of motion, in order (distinct from the green/amber/red speed colours). */
+export const PATH_COLORS = ["#00c8ff", "#b98cff", "#ff3cc8", "#78e6ff", "#ffd278"];
 export interface Calibration {
   polygon?: Polygon | null;
+  paths?: MotionPath[];
+  path_clip_to_calibration?: boolean;
   reference_frame: number;
   segments: Segment[];
   points: ControlPoint[];
@@ -27,6 +36,7 @@ export interface CalibrationResult {
   error?: string;
   method?: string; m_per_px?: number; cm_per_px?: number; rms_m?: number; max_rel_error?: number;
   line_gap_m?: number | null; warnings?: string[]; fit_ok?: boolean;
+  paths?: PathDraw[];
   residuals?: { kind: string; index: number; i?: number; j?: number; error_m: number; measured_m?: number; given_m?: number; rel_error?: number }[];
 }
 
@@ -71,6 +81,7 @@ export interface Vehicle {
   speed_max_kmh: number; speed_min_kmh: number; speed_sigma_kmh: number | null; t_max_s: number | null;
   d_max_m: number | null; speed_trend_pct: number | null;
   profile: { t: number[]; d: number[]; v: number[] } | null;
+  path?: string; coverage_pct?: number;
   // margin of error (k=2, ~95 %); *_u_lower adds the one-sided uncorrected parallax bias below the value
   speed_avg_se_kmh?: number | null;
   speed_max_u_kmh?: number; speed_max_u_lower_kmh?: number; speed_avg_u_kmh?: number; speed_avg_u_lower_kmh?: number;
@@ -117,6 +128,7 @@ export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
   stats_max?: Stats; by_direction_max?: Record<string, Stats>;
+  by_path?: Record<string, { avg: Stats; max: Stats }>;
   uncertainty?: UncertaintySummary | null;
   calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
   run: Record<string, any>; calibration: CalibrationResult;

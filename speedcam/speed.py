@@ -17,6 +17,7 @@ from scipy.signal import savgol_filter
 
 from .config import SpeedSettings
 from .detection import CLASSES
+from .path import PathGeom
 
 INVALIDATING = {"accel", "residual", "gap", "few_points"}
 
@@ -108,8 +109,9 @@ def slope_se(ts: np.ndarray, res: np.ndarray, corr_s: float) -> float:
 
 
 def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
-                  line_a: np.ndarray, line_b: np.ndarray, s: SpeedSettings,
-                  cls: str = "car", mean_conf: float = 1.0) -> Optional[TrackRender]:
+                  line_a: Optional[np.ndarray], line_b: Optional[np.ndarray], s: SpeedSettings,
+                  cls: str = "car", mean_conf: float = 1.0,
+                  paths: Optional[list[PathGeom]] = None) -> Optional[TrackRender]:
     order = np.argsort(frames)
     frames, xy = frames[order], xy[order]
     frames, uidx = np.unique(frames, return_index=True)
@@ -122,6 +124,15 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
     t = full / fps
     P = smooth(P_raw, fps, s)
 
+    if paths:
+        # measure on every path; keep the one this vehicle covers most (a vehicle is counted once,
+        # also where corridors overlap at an intersection; a turning car goes to its longer road)
+        tries = [_analyze_path(track_id, frames, full, t, P_raw, P, max_gap_s, fps, g, s, cls, mean_conf)
+                 for g in paths]
+        measured = [r for r in tries if r.result]
+        if measured:
+            return max(measured, key=lambda r: r.result["path_length_m"])
+        return next((r for r in tries if r.crossed == "short"), tries[0])
     inst = momentary_speed(P_raw, fps, s.momentary_window_s)
     render = TrackRender(frames=full, world=P, inst_kmh=inst, cls=cls)
     ca = first_crossing(t, P, line_a, s.line_extend)
@@ -203,22 +214,120 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         "flags": ";".join(flags),
     }
 
-    result.update(_profile(t, inst, P_raw, td, sd, t_in, t_out, fps, s, v_arc * 3.6, direction))
+    inst_ref = momentary_speed(P_raw, fps, max(2.0, 4 * s.momentary_window_s))
+    dist = np.interp(t, td, sd) - np.interp(t_in, td, sd)
+    result.update(_profile(t, inst, inst_ref, dist, t_in, t_out, v_arc * 3.6, direction))
     render.t_first, render.t_second, render.result = t_in, t_out, result
     return render
 
 
-def _profile(t, inst, P_raw, td, sd, t_in, t_out, fps, s: SpeedSettings, avg_kmh: float, direction: str) -> dict:
-    """Momentary speed between the lines: max/min, where the max happened, noise and a compact profile."""
+def _deriv_kmh(x: np.ndarray, fps: float, window_s: float) -> np.ndarray:
+    """d/dt of a per-frame distance (m) from a local quadratic fit over `window_s`, in km/h."""
+    n = odd_window(int(round(window_s * fps)), 2, len(x))
+    v = np.gradient(x, 1 / fps) if n <= 2 else savgol_filter(x, n, 2, deriv=1, delta=1 / fps, mode="interp")
+    return v * 3.6
+
+
+def _longest_run(mask: np.ndarray) -> Optional[tuple[int, int]]:
+    """First and last index of the longest run of True."""
+    if not mask.any():
+        return None
+    edges = np.diff(np.r_[0, mask.astype(int), 0])
+    starts, ends = np.nonzero(edges == 1)[0], np.nonzero(edges == -1)[0] - 1
+    k = int(np.argmax(ends - starts))
+    return int(starts[k]), int(ends[k])
+
+
+def _analyze_path(track_id, frames, full, t, P_raw, P, max_gap_s, fps, path: PathGeom, s: SpeedSettings,
+                  cls: str, mean_conf: float) -> TrackRender:
+    """Measure a vehicle along the path of motion over all of it that the vehicle covers."""
+    s_sm, lat_sm = path.project(P)
+    inside = (np.abs(lat_sm) <= path.corridor_m) & (s_sm > path.lo + 0.25) & (s_sm < path.hi - 0.25)
+    render = TrackRender(frames=full, world=P, inst_kmh=np.full(len(full), np.nan), cls=cls)
+    run = _longest_run(inside)
+    if run is None:
+        return render
+    i0, i1 = run
+    cover = abs(s_sm[i1] - s_sm[i0])
+    if cover < min(s.path_min_cover_m, 0.5 * (path.hi - path.lo)) or i1 - i0 < 3:
+        render.crossed = "short"
+        return render
+    render.crossed = "AB"
+    sign = 1.0 if s_sm[i1] > s_sm[i0] else -1.0
+    direction = "A->B" if sign > 0 else "B->A"
+    # distance actually travelled along the path (curvature-corrected), increasing with travel
+    u_sm = sign * path.travelled(s_sm, lat_sm)
+    s_raw, lat_raw = path.project(P_raw)
+    u_raw = sign * path.travelled(s_raw, lat_raw)
+    t_in, t_out = float(t[i0]), float(t[i1])
+    dt = t_out - t_in
+    ts, us = t[i0:i1 + 1], u_sm[i0:i1 + 1]
+
+    v_path, _ = np.polyfit(ts, us, 1)
+    accel, quad_max, rms, avg_se = 0.0, 0.0, 0.0, None
+    if len(ts) >= 4:
+        q = np.polyfit(ts, us, 2)
+        accel = float(2 * q[0])
+        quad_res = us - np.polyval(q, ts)
+        quad_max = float(np.abs(quad_res).max())
+        rms = float(np.sqrt(np.mean(quad_res ** 2)))
+        avg_se = slope_se(ts, quad_res, max(s.smooth_window_s, s.momentary_window_s))
+    # audit: the vehicle's own trajectory length over the same time (lane changes make it longer)
+    k = max(1, int(round(s.arc_dt_s * fps)))
+    idx = np.unique(np.r_[np.arange(i0, i1 + 1, k), i1])
+    arc = float(np.linalg.norm(np.diff(P[idx], axis=0), axis=1).sum())
+    v_arc = arc / dt
+    v_path = float(v_path)
+    disagreement = (v_path - v_arc) / v_arc if v_arc > 0 else np.inf
+
+    flags: list[str] = []
+    if abs(accel) > s.max_accel:
+        flags.append("accel")
+    if quad_max > s.max_residual_m:
+        flags.append("residual")
+    if max_gap_s > s.max_gap_s:
+        flags.append("gap")
+    if abs(disagreement) > s.max_disagreement:
+        flags.append("disagree")
+    invalid = INVALIDATING | ({"disagree"} if s.disagreement_invalidates else set())
+    path_len = float(us[-1] - us[0])
+    result = {
+        "track_id": int(track_id), "class": cls, "direction": direction,
+        "t_entry_s": t_in, "t_exit_s": t_out, "frame_entry": t_in * fps, "frame_exit": t_out * fps,
+        "dt_s": float(dt), "path_length_m": path_len,
+        "chord_m": float(np.linalg.norm(P[i1] - P[i0])),
+        "speed_kmh": v_path * 3.6,
+        "speed_line_kmh": v_arc * 3.6,  # audit: trajectory length / time
+        "speed_avg_se_kmh": None if avg_se is None else avg_se * 3.6,
+        "disagreement_pct": float(disagreement * 100),
+        "fit_residual_m": rms, "accel_mps2": accel, "max_gap_s": max_gap_s,
+        "n_points": int(len(frames)), "mean_conf": float(mean_conf),
+        "valid": not (set(flags) & invalid), "flags": ";".join(flags),
+        "s_entry_m": float(s_sm[i0]), "s_exit_m": float(s_sm[i1]),
+        "coverage_pct": float(100 * cover / max(path.hi - path.lo, 1e-9)),
+        "path": path.name,
+    }
+    inst = _deriv_kmh(u_raw, fps, s.momentary_window_s)
+    inst_ref = _deriv_kmh(u_raw, fps, max(2.0, 4 * s.momentary_window_s))
+    result.update(_profile(t, inst, inst_ref, u_sm - u_sm[i0], t_in, t_out, v_path * 3.6, direction))
+    render.inst_kmh = inst
+    render.t_first, render.t_second, render.result = t_in, t_out, result
+    return render
+
+
+def _profile(t, inst, inst_ref, dist, t_in, t_out, avg_kmh: float, direction: str) -> dict:
+    """Momentary speed over the measured stretch: max/min, where the max happened, noise and a
+    compact profile. `inst_ref` is the same curve over a much longer window, `dist` the distance
+    travelled since the start of the stretch, all per frame."""
     seg = (t >= t_in) & (t <= t_out)
     if seg.sum() < 3:
         return {"speed_max_kmh": avg_kmh, "speed_min_kmh": avg_kmh, "speed_sigma_kmh": None, "t_max_s": None,
                 "d_max_m": None, "speed_trend_pct": None, "profile": None}
     v = inst[seg]
     ts = t[seg]
-    d = np.interp(ts, td, sd) - np.interp(t_in, td, sd)  # distance travelled since the first line
+    d = dist[seg]
     # noise: deviation from a much smoother version of the same curve (real speed changes are slow)
-    ref = momentary_speed(P_raw, fps, max(2.0, 4 * s.momentary_window_s))[seg]
+    ref = inst_ref[seg]
     sigma = float(np.std(v - ref))
     k = int(np.argmax(v))
     # speed change from the first to the second half of the stretch, as a share of the average,
@@ -258,7 +367,7 @@ def calibration_check(results: list[dict], min_vehicles: int = 5) -> dict:
         out["status"] = "suspect"
         out["message"] = (
             f"Every vehicle's momentary speed {'rises' if mean > 0 else 'falls'} by about {abs(mean):.0f}% "
-            f"from line A to line B (spread {sd:.1f}%). Real drivers vary; a shared trend points at the "
+            f"from the start to the end of the measured stretch, towards B (spread {sd:.1f}%). Real drivers vary; a shared trend points at the "
             "calibration (perspective or a wrong distance). Max speeds are biased by up to that much. "
             "Re-check the measured distances, and make the polygon span the whole A-B stretch.")
     else:
@@ -266,17 +375,19 @@ def calibration_check(results: list[dict], min_vehicles: int = 5) -> dict:
     return out
 
 
-def compute_speeds(tracks: pd.DataFrame, fps: float, line_a: np.ndarray, line_b: np.ndarray,
-                   s: SpeedSettings) -> tuple[list[dict], dict[int, TrackRender]]:
-    """`tracks` needs columns frame, track_id, x_m, y_m, cls, conf."""
+def compute_speeds(tracks: pd.DataFrame, fps: float, line_a: Optional[np.ndarray], line_b: Optional[np.ndarray],
+                   s: SpeedSettings, paths: Optional[list[PathGeom]] = None) -> tuple[list[dict], dict[int, TrackRender]]:
+    """`tracks` needs columns frame, track_id, x_m, y_m, cls, conf. With `paths`, each vehicle is
+    measured along the path it covers most and lines A/B are ignored."""
     results: list[dict] = []
     renders: dict[int, TrackRender] = {}
     df = tracks[tracks["track_id"] >= 0]
     for tid, g in df.groupby("track_id"):
         cls = CLASSES[int(g["cls"].mode().iloc[0])]
         r = analyze_track(int(tid), g["frame"].to_numpy(), g[["x_m", "y_m"]].to_numpy(float), fps,
-                          np.asarray(line_a, float), np.asarray(line_b, float), s, cls,
-                          float(g["conf"].mean()))
+                          None if line_a is None else np.asarray(line_a, float),
+                          None if line_b is None else np.asarray(line_b, float), s, cls,
+                          float(g["conf"].mean()), paths=paths)
         if r is None:
             continue
         renders[int(tid)] = r

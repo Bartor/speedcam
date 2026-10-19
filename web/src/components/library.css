@@ -38,3 +38,9 @@
 .jobs-ind-row:hover { background: var(--surface-2); }
 .jobs-ind-row .row { margin: 0 0 4px; }
 .lib-job { position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px 6px; background: rgba(0, 0, 0, .75); }
+
+/* Calibrate: list of paths of motion */
+.path-item { padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.path-item:last-of-type { border-bottom: none; }
+.path-name { font-weight: 600; background: transparent; border-color: transparent; padding: 2px 4px; }
+.path-name:hover, .path-name:focus { border-color: var(--border); background: var(--bg); }

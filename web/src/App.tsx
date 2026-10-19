@@ -20,7 +20,7 @@ function stepDone(p: Project | null, s: Screen): boolean {
   const c = p.config.calibration;
   switch (s) {
     case "import": return true;
-    case "calibrate": return !!(c.line_a && c.line_b && !p.calibration_result.error && p.calibration_result.fit_ok !== false);
+    case "calibrate": return !!(((c.paths ?? []).some((pp) => pp.points.length >= 2) || (c.line_a && c.line_b)) && !p.calibration_result.error && p.calibration_result.fit_ok !== false);
     case "process": return !!p.status.results_json;
     case "results": return !!p.status.render_mp4;
   }

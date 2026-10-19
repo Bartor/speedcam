@@ -80,6 +80,18 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    more than 5%, the calibration is refused, because the model doesn't fit the view. Draw lines A and B, plus an optional ROI. Scale,
    residuals and the A–B gap update live. All clicks are made on full-resolution
    stills decoded from the original.
+   **Measuring: lines A/B or paths of motion.** Lines A and B measure each vehicle
+   between two crossings. With the **Path** tool you instead click points along a road
+   in the direction of travel. A smooth curve on the ground is fitted, with a corridor
+   (± metres) around it, and you can draw several, e.g. one per road of an
+   intersection. Each vehicle is measured along the path it covers most, over all of
+   it inside the corridor, so a vehicle is never counted twice. Speed is the rate of
+   distance *along* the path, so lane changes don't inflate it. On bends it's
+   corrected for the vehicle's lane: an outer lane 3.5 m off a 50 m-radius curve
+   would otherwise read ~7% slow. By default only the part of each path inside the
+   calibrated area (plus 5 m) is measured. Far from where the calibration was
+   measured it's extrapolated; on a test clip that cost 12 km/h. The rest is drawn
+   dashed. Results get a Path column and per-path statistics.
 3. **Process:** choose **Camera: Hovering** (stabilize every frame) or **Still**
    (skip stabilization, faster). A preview run with stabilization on measures camera
    drift against the reference frame, in px and in cm on the ground, and says whether
@@ -142,6 +154,7 @@ speedcam synth --speed 50                     # synthetic validation clip + conf
 | Tracking | ByteTrack (supervision) on reference-frame boxes. |
 | Vehicle position | Optical flow on the vehicle's own texture (`flow.*`): corners inside each box (away from its edge and other vehicles) are tracked with forward-backward Lucas–Kanade, mapped to the reference frame and fitted with a RANSAC similarity; features that don't move like the box did over the last 0.5 s (wires, poles, road) are dropped. The position follows the flow frame to frame and is pulled back to the box centre with a 1 s complementary filter, so it can't drift; with too few features it falls back to the box centre. Stored as `frx/fry` next to the box centre `rx/ry` in `tracks.parquet`. On 10 real 4K clips this cut momentary-speed noise from ±0.57 to ±0.28 km/h at 0.25 s and ±0.29 to ±0.18 at 0.5 s, the max-speed bias at 0.5 s from +0.28 to +0.02 km/h and the arc-length fit residual from 2.1 to 1.0 cm; average speeds agree with box centres to within 0.3 km/h on most clips. Costs ~15-30 ms CPU per frame on the tracking thread. |
 | Speed | Savitzky–Golay smoothing of the world trajectory. **Momentary:** |velocity| from a local quadratic fit over 0.5 s (`speed.momentary_window_s`; measured noise about ±0.18 km/h on 4K footage with flow positions, ±0.28 at 0.25 s; box centres alone ±0.29 / ±0.57), giving max/min, where the max happened, and a profile. **Average:** linear regression of arc length vs. time between the sub-frame crossings of A and B. **Audit:** chord / Δt. Flags: `disagree` (>2%), `accel` (>8 m/s²), `residual` (jumps ⇒ ID switch), `gap`, `multi_cross`. |
+| Paths | Centripetal Catmull-Rom spline through the clicked points on the ground plane; positions projected to (distance along, offset across); speed = d(distance along, curvature-corrected for the offset)/dt; each vehicle on the path it covers most; measured only inside the calibrated area by default. |
 | Stats | t-interval for the mean, bootstrap CIs for p85/p95, ITE `n = (S·K/E)²·(2+U²)/2`. |
 
 Outputs in the project or `--out` folder: `tracks.parquet`, `transforms.npz`,

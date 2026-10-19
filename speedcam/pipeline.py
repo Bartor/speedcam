@@ -80,10 +80,11 @@ def _preview_jpeg(frame: np.ndarray, corners: np.ndarray, ids: np.ndarray, trail
     """Tracking preview: boxes coloured by track id, id labels, trails and lines A/B (all frame px)."""
     k = width / frame.shape[1]
     img = cv2.resize(frame, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
-    for name, pts, color in lines:
+    for name, pts, color in lines:  # lines A/B, or the path of motion and its corridor edges
         p = (pts * k).astype(np.int32)
-        cv2.line(img, tuple(p[0]), tuple(p[1]), color, 2, cv2.LINE_AA)
-        cv2.putText(img, name, tuple(p[0] + [4, -6]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+        cv2.polylines(img, [p], False, color, 2 if name else 1, cv2.LINE_AA)
+        if name:
+            cv2.putText(img, name, tuple(p[0] + [4, -6]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
     for tid, pts in trails.items():
         if len(pts) > 1:
             cv2.polylines(img, [(np.array(pts) * k).astype(np.int32)], False, _track_color(tid), 2, cv2.LINE_AA)
@@ -166,8 +167,8 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         reporter.log(m, "warning")
 
     cal = calibration.compute(cfg.calibration, (info.width, info.height))
-    if cal.line_a_world is None or cal.line_b_world is None:
-        raise ValueError("Measurement lines A and B must be defined in the calibration")
+    if not cal.path_geoms and (cal.line_a_world is None or cal.line_b_world is None):
+        raise ValueError("Draw a path of motion, or measurement lines A and B, in the calibration")
     if not cal.fit_ok:
         raise ValueError(cal.warnings[0])
     roi = np.array(cfg.calibration.roi, np.float32) if cfg.calibration.roi and len(cfg.calibration.roi) >= 3 else None
@@ -282,8 +283,14 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         if now - state["last_preview"] > preview_every_s:
             state["last_preview"] = now
             T_inv = np.linalg.inv(T)
-            lines = [(n, transform_points(T_inv, np.array(l, float)), col) for n, l, col in
-                     (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))]
+            if cal.paths_px:
+                lines = []
+                for g, d in zip(cal.path_geoms, cal.paths_px):
+                    lines.append((g.name, transform_points(T_inv, d["px"]), (255, 200, 0)))
+                    lines += [("", transform_points(T_inv, e), (160, 160, 160)) for e in d["corridor_px"]]
+            else:
+                lines = [(n, transform_points(T_inv, np.array(l, float)), col) for n, l, col in
+                         (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))]
             text = f"frame {i}  t {i / fps:.2f} s  {len(dets)} det  {len(live)} tracked  {len(seen_tracks)} tracks so far"
             reporter.preview(_preview_jpeg(frame, dets.corners, ids, trails, lines, text))
 
@@ -329,7 +336,8 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
             out / "stabilization.csv", index=False)
 
     reporter.progress("computing speeds", 0, 1)
-    results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                           paths=cal.path_geoms)
     budget = margin_of_error(cfg, results, renders, cal, fps)
     n_fail = sum(1 for r in stab_rows if not r[1])
     if pts_anomalies:
@@ -355,7 +363,7 @@ def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal,
 
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
                   timing_msgs: list[str], budget: Optional[dict], run: dict) -> dict:
-    cols = ["track_id", "class", "direction", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
+    cols = ["track_id", "class", "path", "direction", "coverage_pct", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
             "path_length_m", "chord_m", "speed_kmh", "speed_avg_u_kmh", "speed_avg_u_lower_kmh",
             "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
             "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct",
@@ -381,6 +389,16 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
             d: summarize([r["speed_max_kmh"] for r in valid if r["direction"] == d], cfg.stats)
             for d in ("A->B", "B->A")
         },
+        # one set of statistics per path of motion (e.g. per road of an intersection)
+        "by_path": {
+            name: {
+                "avg": summarize([r["speed_kmh"] for r in valid if r.get("path") == name], cfg.stats,
+                                 n_total=sum(r.get("path") == name for r in results)),
+                "max": summarize([r["speed_max_kmh"] for r in valid if r.get("path") == name], cfg.stats,
+                                 n_total=sum(r.get("path") == name for r in results)),
+            }
+            for name in [p.name for p in cfg.calibration.paths if len(p.points) >= 2]
+        },
         "calibration_check": calibration_check(results),
         "uncertainty": budget,
         "vehicles": results,
@@ -398,7 +416,8 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     df = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(df))
     df["x_m"], df["y_m"] = world[:, 0], world[:, 1]
-    results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed)
+    results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                           paths=cal.path_geoms)
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
     run = {**prev.get("run", {}), **track_diagnostics(df, renders)}
     budget = margin_of_error(cfg, results, renders, cal, fps)
@@ -425,4 +444,5 @@ def track_diagnostics(df: pd.DataFrame, renders: dict) -> dict:
         "tracks_crossing_b_only": crossed.count("B"),
         "tracks_crossing_neither": crossed.count(""),
         "tracks_crossing_both": crossed.count("AB"),
+        "tracks_too_short": crossed.count("short"),  # path mode: in the corridor, too little of the path
     }
