@@ -347,3 +347,22 @@ def test_auto_detector_secondary_only_adds_missed_vehicles():
     # the shared vehicles keep the primary's boxes exactly (no centre jumping between models)
     np.testing.assert_allclose(out.corners[:2], np.concatenate([_box(0, 0).corners, _box(200, 0).corners]))
     assert out.cls[2] == 1
+
+
+def test_auto_detector_prefers_top_down_model_when_close():
+    from speedcam.config import DetectionSettings
+    from speedcam.detection import AutoDetector
+
+    frames = [np.zeros((10, 10, 3))] * 4
+    coco = _FakeDet([_box(0, 0, conf=0.3)])
+    obb = _FakeDet([_box(0, 0, conf=0.6), _box(200, 0, conf=0.6)])  # top-down
+    vis = _FakeDet([_box(0, 0, conf=0.8), _box(200, 0, conf=0.8), _box(400, 0, conf=0.6)])
+    # straight down: top-down scores 1.2 vs best 2.2 (0.55 >= 0.35) -> top-down primary, VisDrone fills
+    auto = AutoDetector(DetectionSettings(), [coco, obb, vis], ["coco", "obb", "vis"], topdown=1)
+    info = auto.choose_primary(frames)
+    assert info["primary"] == "obb" and info["secondary"] == "vis"
+    # oblique: the top-down model finds little (0.3 vs 2.2) -> best scorer wins, runner-up fills
+    obb_weak = _FakeDet([_box(0, 0, conf=0.3)])
+    auto = AutoDetector(DetectionSettings(), [coco, obb_weak, vis], ["coco", "obb", "vis"], topdown=1)
+    info = auto.choose_primary(frames)
+    assert info["primary"] == "vis" and info["secondary"] in ("coco", "obb")

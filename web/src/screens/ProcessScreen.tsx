@@ -8,7 +8,7 @@ interface Props { project: Project; onChanged: (p: Project) => void; onDone: () 
 type Field = { section: string; key: string; label: string; type: "num" | "text" | "bool" | "select"; options?: string[]; hint?: string };
 
 const FIELDS: Field[] = [
-  { section: "detection", key: "model", label: "YOLO model", type: "text", hint: "auto = both below, picks the better one per clip and fills in what it misses (any angle, ~2x GPU time) · yolo11x.pt = COCO, oblique views · yolo11x-obb.pt = DOTA, straight down" },
+  { section: "detection", key: "model", label: "YOLO model", type: "text", hint: "auto = picks the best of COCO, top-down and VisDrone per clip and fills in with the runner-up (any angle, ~2x GPU time) · yolo11x.pt = COCO, oblique views · yolo11x-obb.pt = DOTA, straight down" },
   { section: "detection", key: "conf", label: "Confidence", type: "num" },
   { section: "detection", key: "imgsz", label: "Inference size", type: "num" },
   { section: "detection", key: "half", label: "Fast mode (FP16)", type: "bool", hint: "~45% faster, but results aren't identical on reruns and speeds can shift by ~0.2 km/h. Off = FP32, repeatable." },
@@ -143,7 +143,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
           <span className="muted">Model:</span>
           {["auto", "visdrone", "yolo11x.pt", "yolo11x-obb.pt"].map((m) => (
             <button key={m} className={`chip ${cfg.detection.model === m ? "active" : ""}`}
-              title={m === "auto" ? "COCO + top-down model; works at any camera angle"
+              title={m === "auto" ? "Picks COCO, top-down or VisDrone per clip (top-down when filmed straight down) and fills in with the runner-up; any angle"
                 : m === "visdrone" ? "yolo11x trained on VisDrone drone footage: best on oblique views (more distant cars, faster); weaker straight down" : undefined}
               onClick={() => setField(FIELDS[0], m)}>{m === "auto" ? "Auto (any angle)" : m === "visdrone" ? "VisDrone (trained)" : m}</button>
           ))}

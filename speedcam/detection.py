@@ -212,34 +212,53 @@ def _concat(a: Detections, b: Detections) -> Detections:
 
 
 class AutoDetector:
-    """Two detectors for any camera angle: a COCO model (strong on oblique views) and a DOTA
-    oriented-box model (strong straight down).
+    """Detectors for any camera angle: COCO (strong on oblique views), a DOTA oriented-box model
+    (strong straight down) and, when installed, a model trained on VisDrone drone footage.
 
-    Per clip, the one that finds more vehicles on sampled frames becomes the primary. On every
-    frame the primary's boxes are kept and the secondary only adds vehicles the primary missed,
-    so each vehicle keeps boxes from one model and its centre doesn't jump between box styles.
+    Per clip, each candidate is scored on sample frames (vehicles found x confidence). The
+    top-down model becomes the primary whenever it scores within `auto_topdown_share` of the best
+    (it only works on straight-down footage, where its oriented boxes keep vehicles best);
+    otherwise the best scorer does. The runner-up fills in vehicles the primary misses: on every
+    frame the primary's boxes are kept and the runner-up only adds non-overlapping ones, so each
+    vehicle keeps boxes from one model. Two models run per frame, whatever the number of candidates.
     """
 
     OVERLAP = 0.3  # secondary boxes overlapping a primary box this much are the same vehicle
 
-    def __init__(self, s: DetectionSettings, detectors: Optional[list] = None, names: Optional[list] = None):
+    def __init__(self, s: DetectionSettings, detectors: Optional[list] = None, names: Optional[list] = None,
+                 topdown: Optional[int] = None):
         self.s = s
         if detectors is None:
-            coco, obb = s.auto_models
-            detectors = [YoloDetector(s.model_copy(update={"model": coco})),
-                         YoloDetector(s.model_copy(update={"model": obb, "imgsz": s.obb_imgsz}))]
-            names = [coco, obb]
+            detectors, names = [], []
+            for name in s.auto_models:
+                try:
+                    path = resolve_model(name)
+                except FileNotFoundError:
+                    continue  # e.g. the VisDrone model isn't trained/installed here
+                d = YoloDetector(s.model_copy(update={"model": path}))
+                if d.obb:  # DOTA models are trained at 1024 px; larger sizes detected far less
+                    d = YoloDetector(s.model_copy(update={"model": path, "imgsz": s.obb_imgsz}))
+                detectors.append(d)
+                names.append(name)
+            topdown = next((k for k, d in enumerate(detectors) if d.obb), None)
         self.detectors = detectors
         self.names = names or [f"model{k}" for k in range(len(detectors))]
-        self.primary = 0
+        self.topdown = topdown
+        self.primary, self.secondary = 0, (1 if len(detectors) > 1 else None)
         self.scores: Optional[list[float]] = None
 
     def choose_primary(self, frames: list[np.ndarray]) -> dict:
-        """Score each model on sample frames (sum of confidences ~ vehicles found x certainty)."""
+        """Score every candidate on sample frames and pick the primary and the fill-in model."""
         self.scores = [float(sum(d.conf.sum() for d in det.detect_batch(frames))) for det in self.detectors]
-        self.primary = int(np.argmax(self.scores))
+        best = int(np.argmax(self.scores))
+        td = self.topdown
+        self.primary = td if td is not None and self.scores[td] >= self.s.auto_topdown_share * self.scores[best] else best
+        rest = [k for k in range(len(self.detectors)) if k != self.primary]
+        self.secondary = max(rest, key=lambda k: self.scores[k]) if rest else None
+        per = max(len(frames), 1)
         return {"primary": self.names[self.primary],
-                "scores": {n: round(sc / max(len(frames), 1), 2) for n, sc in zip(self.names, self.scores)}}
+                "secondary": None if self.secondary is None else self.names[self.secondary],
+                "scores": {n: round(sc / per, 2) for n, sc in zip(self.names, self.scores)}}
 
     def merge(self, primary: Detections, secondary: Detections) -> Detections:
         if len(secondary) == 0 or len(primary) == 0:
@@ -252,7 +271,9 @@ class AutoDetector:
 
     def detect_batch(self, frames: list[np.ndarray]) -> list[Detections]:
         prim = self.detectors[self.primary].detect_batch(frames)
-        sec = self.detectors[1 - self.primary].detect_batch(frames)
+        if self.secondary is None:
+            return prim
+        sec = self.detectors[self.secondary].detect_batch(frames)
         return [self.merge(p, q) for p, q in zip(prim, sec)]
 
 

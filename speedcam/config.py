@@ -78,7 +78,13 @@ class DetectionSettings(BaseModel):
     # "auto" runs a COCO model (good for oblique views) and a DOTA oriented-box model (good for
     # straight-down views); see AutoDetector. Or name one Ultralytics model, e.g. "yolo11x.pt".
     model: str = "auto"
-    auto_models: tuple[str, str] = ("yolo11x.pt", "yolo11x-obb.pt")
+    # candidates for "auto": COCO (oblique), DOTA oriented boxes (straight down), and the
+    # VisDrone-trained model when its weights are installed (skipped otherwise)
+    auto_models: list[str] = Field(default_factory=lambda: ["yolo11x.pt", "yolo11x-obb.pt", "visdrone"])
+    # the top-down (OBB) model only works straight down; it's preferred whenever its score reaches
+    # this share of the best model's score. Measured on 10 real clips: oblique 0.00-0.22,
+    # straight down 0.54
+    auto_topdown_share: float = 0.35
     obb_imgsz: int = 1024  # DOTA models are trained at 1024; larger sizes detected far less here
     auto_sample_frames: int = 12  # frames sampled across the clip to pick the primary model
     conf: float = 0.25

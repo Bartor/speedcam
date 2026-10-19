@@ -37,14 +37,19 @@ cd web && npm install && npm run build   # builds the UI into speedcam/server/st
 ```
 
 Ultralytics downloads the YOLO weights the first time they are used. The default
-detector is **Auto**, which works at any camera angle. It loads COCO `yolo11x.pt`
-(strong on oblique views) and DOTA `yolo11x-obb.pt` (strong straight down). For each
-clip it samples 12 frames, and the model that finds more vehicles becomes the
-primary. On every frame the primary's boxes are kept, and the other model only adds
-vehicles the primary missed, so each vehicle keeps a consistent box. It costs about
-twice the GPU time of one model. Measured: on a straight-down clip, COCO finds 1.5
-detections per frame, top-down 3.4 and Auto 3.6; on an oblique clip, 15.4 / 6.4 /
-16.6. Either model can still be chosen on its own on the Process screen.
+detector is **Auto**, which works at any camera angle. It has up to three candidates:
+COCO `yolo11x.pt` (strong on oblique views), DOTA `yolo11x-obb.pt` (strong straight
+down, useless otherwise) and the VisDrone-trained model below, when its weights are
+installed. For each clip it samples 12 frames and scores each model by the sum of its
+detection confidences. The top-down model becomes the primary whenever it scores at
+least 35% of the best model (`auto_topdown_share`), since it holds cars under trees
+better straight down; otherwise the best scorer does. The runner-up fills in: on every
+frame the primary's boxes are kept, and the second model only adds vehicles the
+primary missed, so each vehicle keeps a consistent box. It costs about twice the GPU
+time of one model. On ten real clips the top-down share was 0.00-0.22 on oblique
+footage and 0.54 on the straight-down clip (0457), which got the top-down model plus
+VisDrone; six oblique clips got VisDrone plus COCO, three got COCO plus VisDrone.
+Any model can still be chosen on its own on the Process screen.
 
 **VisDrone (trained)** is an optional third detector: `yolo11x` fine-tuned on
 VisDrone2019-DET (drone footage of city traffic at many heights and angles), with
@@ -62,7 +67,7 @@ three real clips:
 The detector doesn't change any vehicle's speed, only which vehicles get measured.
 VisDrone finds more distant cars in oblique views and is faster, since it's a single
 model. Straight down, cars partly under trees drop out longer, and the top-down model
-in Auto holds them better. Pick VisDrone for oblique clips and Auto otherwise.
+in Auto holds them better. That's why Auto now picks between all three per clip.
 
 Boxes and labels in the overlay and the render stay steady through detector gaps
 of up to 1 s: missed frames are interpolated from the detections on either side.
@@ -168,7 +173,7 @@ speedcam synth --speed 50                     # synthetic validation clip + conf
 | Timing | `frame / capture_fps`. Container PTS is checked for gaps; sidecar DJI `.SRT` `DiffTime` is used to suggest the capture rate. |
 | Calibration | Polygon: shape solved from sides + diagonals, then homography. Segments only: uniform scale (warns when all segments are parallel). 2–3 control points: similarity. ≥4: homography. Every segment is reported as a check residual. |
 | Stabilization | Reference corners are tracked into each frame with pyramidal Lucas–Kanade, then fitted with RANSAC (similarity by default). Vehicles are masked. Falls back to ORB vs. reference, then ORB vs. the previous frame (chained), then the last transform (logged). Frames are never warped for analysis. |
-| Detection | Ultralytics YOLO: Auto (COCO + DOTA-OBB, a primary per clip plus fill-in) or a single model, oriented or axis-aligned boxes, optional tiling with NMS across tiles. DOTA `small/large vehicle` map to car/truck. |
+| Detection | Ultralytics YOLO: Auto (COCO, DOTA-OBB and VisDrone; a primary per clip plus fill-in) or a single model, oriented or axis-aligned boxes, optional tiling with NMS across tiles. DOTA `small/large vehicle` map to car/truck. |
 | Tracking | ByteTrack (supervision) on reference-frame boxes. |
 | Vehicle position | Optical flow on the vehicle's own texture (`flow.*`): corners inside each box (away from its edge and other vehicles) are tracked with forward-backward Lucas–Kanade, mapped to the reference frame and fitted with a RANSAC similarity; features that don't move like the box did over the last 0.5 s (wires, poles, road) are dropped. The position follows the flow frame to frame and is pulled back to the box centre with a 1 s complementary filter, so it can't drift; with too few features it falls back to the box centre. Stored as `frx/fry` next to the box centre `rx/ry` in `tracks.parquet`. On 10 real 4K clips this cut momentary-speed noise from ±0.57 to ±0.28 km/h at 0.25 s and ±0.29 to ±0.18 at 0.5 s, the max-speed bias at 0.5 s from +0.28 to +0.02 km/h and the arc-length fit residual from 2.1 to 1.0 cm; average speeds agree with box centres to within 0.3 km/h on most clips. Costs ~15-30 ms CPU per frame on the tracking thread. |
 | Speed | Savitzky–Golay smoothing of the world trajectory. **Momentary:** |velocity| from a local quadratic fit over 0.5 s (`speed.momentary_window_s`; measured noise about ±0.18 km/h on 4K footage with flow positions, ±0.28 at 0.25 s; box centres alone ±0.29 / ±0.57), giving max/min, where the max happened, and a profile. **Average:** linear regression of arc length vs. time between the sub-frame crossings of A and B. **Audit:** chord / Δt. Flags: `disagree` (>2%), `accel` (>8 m/s²), `residual` (jumps ⇒ ID switch), `gap`, `multi_cross`. |
