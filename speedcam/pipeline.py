@@ -184,7 +184,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         sample = [g.get(int(f)) for f in np.linspace(lo, max(lo, hi), n_s).round()]
         g.close()
         detector_info = detector.choose_primary(sample)
-        reporter.log(f"Auto detector: primary {detector_info['primary']} "
+        reporter.log(f"Auto detector: primary {detector_info['primary']}, fill-in {detector_info['secondary']} "
                      f"(vehicles x confidence per frame: {detector_info['scores']})")
 
     ref_idx = cfg.calibration.reference_frame
