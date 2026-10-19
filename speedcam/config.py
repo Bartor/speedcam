@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Pt = tuple[float, float]
 
@@ -55,6 +55,40 @@ class MotionPath(BaseModel):
     corridor_m: float = 6.0  # half-width of the corridor around the path, metres
 
 
+class TrafficLight(BaseModel):
+    """A signal head: the circle (reference px) around its lamps whose colour is read each frame."""
+
+    px: Pt
+    radius_px: float = 12.0
+
+
+class StopLine(BaseModel):
+    """A line (2+ points, reference px) that must not be crossed while the light is red."""
+
+    points: list[Pt] = Field(default_factory=list)
+    # which crossings count: "forward" = from the left of the line (as drawn, first point to last)
+    # to its right, "reverse" the other way, "both" either
+    direction: Literal["both", "forward", "reverse"] = "both"
+
+
+class RedLightSetup(BaseModel):
+    """One signal group: its lights (any number of heads showing the same phase) and stop lines."""
+
+    name: str = "Light 1"
+    lights: list[TrafficLight] = Field(default_factory=list)
+    stop_lines: list[StopLine] = Field(default_factory=list)
+    # "colour": read the phase from the lights in the video; "manual": red during red_intervals
+    state_source: Literal["colour", "manual"] = "colour"
+    red_intervals: list[tuple[float, float]] = Field(default_factory=list)  # seconds of real time
+
+
+class SolidLine(BaseModel):
+    """A solid road marking (2+ points, reference px): any vehicle crossing it is reported."""
+
+    name: str = "Solid line 1"
+    points: list[Pt] = Field(default_factory=list)
+
+
 class Calibration(BaseModel):
     reference_frame: int = 0
     segments: list[Segment] = Field(default_factory=list)
@@ -70,6 +104,9 @@ class Calibration(BaseModel):
     # points, plus this margin): far from where it was measured a calibration is extrapolated.
     path_clip_to_calibration: bool = True
     path_calibration_margin_m: float = 5.0
+    # violation checks (see violations.py): red-light setups and solid lines
+    red_lights: list[RedLightSetup] = Field(default_factory=list)
+    solid_lines: list[SolidLine] = Field(default_factory=list)
 
 
 class DetectionSettings(BaseModel):
@@ -81,10 +118,19 @@ class DetectionSettings(BaseModel):
     # candidates for "auto": COCO (oblique), DOTA oriented boxes (straight down), and the
     # VisDrone-trained model when its weights are installed (skipped otherwise)
     auto_models: list[str] = Field(default_factory=lambda: ["yolo11x.pt", "yolo11x-obb.pt", "visdrone"])
+
+    @field_validator("auto_models")
+    @classmethod
+    def _add_visdrone(cls, v: list[str]) -> list[str]:
+        # projects saved before VisDrone was a candidate stored the old two-model default
+        return [*v, "visdrone"] if v == ["yolo11x.pt", "yolo11x-obb.pt"] else v
     # the top-down (OBB) model only works straight down; it's preferred whenever its score reaches
     # this share of the best model's score. Measured on 10 real clips: oblique 0.00-0.22,
     # straight down 0.54
     auto_topdown_share: float = 0.35
+    # fill-in model when the top-down model is primary. On the straight-down clip 0457, VisDrone
+    # fill-ins broke tracks of cars under trees: 17 valid vehicles ("gap" on 15) vs 26 with COCO
+    auto_topdown_fill: str = "yolo11x.pt"
     obb_imgsz: int = 1024  # DOTA models are trained at 1024; larger sizes detected far less here
     auto_sample_frames: int = 12  # frames sampled across the clip to pick the primary model
     conf: float = 0.25
@@ -178,6 +224,35 @@ class SpeedSettings(BaseModel):
     path_min_cover_m: float = 10.0
 
 
+class ViolationSettings(BaseModel):
+    """How red-light running and solid-line crossings are decided (see violations.py)."""
+
+    # light colour: a pixel in a light's circle counts when it is this bright and saturated
+    # (HSV, 0-255); the colour with the most such pixels is the light's state on that frame
+    light_min_value: int = 150
+    light_min_saturation: int = 70
+    light_min_pixels: int = 3
+    # LED lights flicker against the camera shutter and drop out on single frames: a frame with
+    # no colour keeps the last state for up to this long
+    light_hold_s: float = 1.0
+    light_smooth_s: float = 0.3  # majority vote over this window removes single-frame misreads
+    amber_is_red: bool = False
+    # a vehicle entering this soon after the light turned red isn't reported (reaction tolerance)
+    red_grace_s: float = 0.0
+    # a crossing counts once the vehicle's position is this far on both sides of the line: the
+    # tracked position wobbles by a few tens of cm, so a vehicle driving along a line doesn't
+    # "cross" it back and forth
+    hysteresis_m: float = 0.5
+    # solid lines: "centre" = the vehicle's centre crosses (a lane change); "wheels" = any part of
+    # its box gets over the line by overlap_m for min_duration_s (straddling); boxes are only the
+    # vehicle's footprint when filmed straight down. On 0457 (straight down, no lane changes)
+    # boxes of normally driven vehicles reached up to 0.29 m over the lane line, so the default
+    # leaves a margin above that
+    solid_mode: Literal["centre", "wheels"] = "centre"
+    overlap_m: float = 0.5
+    min_duration_s: float = 0.5
+
+
 class RenderSettings(BaseModel):
     mode: Literal["stabilized", "original"] = "stabilized"
     output_fps: Optional[float] = None  # None = native (capture_fps)
@@ -240,6 +315,7 @@ class ProjectConfig(BaseModel):
     render: RenderSettings = Field(default_factory=RenderSettings)
     stats: StatsSettings = Field(default_factory=StatsSettings)
     uncertainty: UncertaintySettings = Field(default_factory=UncertaintySettings)
+    violations: ViolationSettings = Field(default_factory=ViolationSettings)
 
 
 def load_config(path: str | Path) -> ProjectConfig:

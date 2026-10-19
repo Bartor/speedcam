@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import calibration
 from .config import ProjectConfig, RenderSettings
 from .flow import reference_positions
-from .pipeline import Reporter, margin_of_error, resolve_capture_fps
+from .pipeline import Reporter, find_violations, margin_of_error, resolve_capture_fps
 from .speed import TrackRender, compute_speeds
 from .stabilization import transform_points
 from .timing import probe
@@ -36,6 +36,31 @@ LINE_A, LINE_B = (0, 200, 255), (255, 60, 200)
 # paths of motion: distinct from the green/amber/red used for speeds
 PATH_COLORS = [(0, 200, 255), (185, 140, 255), (255, 60, 200), (120, 230, 255), (255, 210, 120)]
 GOOD, WARN, BAD, INVALID = (46, 204, 113), (255, 176, 32), (235, 64, 52), (150, 150, 160)
+VIOLATION = (255, 40, 90)
+LIGHT_RGB = {"red": BAD, "amber": WARN, "green": GOOD}
+
+
+def violation_events(viol: Optional[dict]) -> dict[int, list[dict]]:
+    """Per track: its violations as {t, big, small, line}, for labels on the vehicle."""
+    out: dict[int, list[dict]] = {}
+    for e in (viol or {}).get("red_light", []):
+        if e["violation"]:
+            since = e.get("phase_for_s")
+            out.setdefault(e["track_id"], []).append({
+                "t": e["t_s"], "big": "RED LIGHT", "line": e["name"],
+                "small": e["name"] + (f" · red {since:.1f} s" if since is not None else "")})
+    for e in (viol or {}).get("solid_line", []):
+        out.setdefault(e["track_id"], []).append({
+            "t": e["t_s"], "big": "SOLID LINE", "line": e["name"],
+            "small": e["name"] + (" · straddling" if e["how"] == "straddled" else "")})
+    return out
+
+
+def phase_at(phases: list[dict], t: float) -> str:
+    for p in phases:
+        if p["t0"] <= t < p["t1"]:
+            return p["state"]
+    return "unknown"
 
 
 def speed_rgb(kmh: float, limit: float) -> tuple[int, int, int]:
@@ -375,8 +400,10 @@ def filled_boxes(tracks: pd.DataFrame, max_gap_frames: int) -> pd.DataFrame:
 class Overlay:
     def __init__(self, cfg: ProjectConfig, fps: float, cal, renders: dict[int, TrackRender],
                  tracks: pd.DataFrame, transforms: dict, size: tuple[int, int], src_size: tuple[int, int],
-                 typo: Optional[Typography] = None):
+                 typo: Optional[Typography] = None, viol: Optional[dict] = None):
         self.cfg, self.fps, self.cal, self.renders = cfg, fps, cal, renders
+        self.events = violation_events(viol)
+        self.phases = [lt["phases"] for lt in (viol or {}).get("lights", [])]
         self.rs = cfg.render
         self.W, self.H = size
         self.S = np.diag([size[0] / src_size[0], size[1] / src_size[1], 1.0])
@@ -444,6 +471,32 @@ class Overlay:
                 placed.append((c[0] - pw_ / 2, c[1] - ph_ / 2, c[0] + pw_ / 2, c[1] + ph_ / 2))
                 self._pill(frame, c[0], c[1] + ph_ / 2, name, small, color, INK, 0.95, center=True)
 
+    def _draw_rules(self, frame, to_disp, t: float) -> None:
+        """Solid lines, and red-light setups: lights and stop lines in the colour of the phase."""
+        cal = self.cfg.calibration
+        hot = {e["line"] for ev in self.events.values() for e in ev
+               if e["big"] == "SOLID LINE" and 0 <= t - e["t"] <= self.rs.label_hold_s}
+        for sl in cal.solid_lines:
+            if len(sl.points) < 2:
+                continue
+            p = transform_points(to_disp, np.array(sl.points, float)).astype(np.int32)
+            color = VIOLATION if sl.name in hot else (235, 235, 235)
+            cv2.polylines(frame, [p], False, (20, 20, 20), self.lw + 3, cv2.LINE_AA)
+            cv2.polylines(frame, [p], False, bgr(color), self.lw + 1, cv2.LINE_AA)
+        for k, setup in enumerate(cal.red_lights):
+            state = phase_at(self.phases[k], t) if k < len(self.phases) else "unknown"
+            color = LIGHT_RGB.get(state, INVALID)
+            for sl in setup.stop_lines:
+                if len(sl.points) < 2:
+                    continue
+                p = transform_points(to_disp, np.array(sl.points, float)).astype(np.int32)
+                cv2.polylines(frame, [p], False, (20, 20, 20), self.lw + 4, cv2.LINE_AA)
+                cv2.polylines(frame, [p], False, bgr(color), self.lw + 2, cv2.LINE_AA)
+            for lt in setup.lights:
+                c = transform_points(to_disp, np.array([lt.px], float))[0]
+                r = max(int(round(lt.radius_px * to_disp[0, 0])) + 3, int(6 * self.k))
+                cv2.circle(frame, (int(c[0]), int(c[1])), r, bgr(color), self.lw, cv2.LINE_AA)
+
     def draw(self, frame: np.ndarray, n: int) -> np.ndarray:
         T = self.T_at(n)
         if self.rs.mode == "stabilized":
@@ -477,11 +530,13 @@ class Overlay:
             c = p[far] + out * (0.5 * abs(out[0]) * pw_ + 0.5 * abs(out[1]) * ph_ + 8 * self.k)
             self._pill(frame, c[0], c[1] + ph_ / 2, name, small, color, INK, 0.95, center=True)
 
+        self._draw_rules(frame, to_disp, t)
         ids, corners = self.by_frame.get(n, (np.zeros(0, int), np.zeros((0, 4, 2))))
         for tid, c in zip(ids, corners):
             r = self.renders.get(int(tid))
             res = r.result if r else None
-            if res is None and not self.rs.show_unmeasured:
+            ev = [e for e in self.events.get(int(tid), []) if t >= e["t"]]
+            if res is None and not ev and not self.rs.show_unmeasured:
                 continue  # parked cars, trams, tracks that never cross both lines
             pts = transform_points(to_disp, c)
             color, label = (220, 220, 220), None
@@ -504,9 +559,17 @@ class Overlay:
                 if kk > lo:
                     trail = transform_points(to_disp, self.trail_px[int(tid)][lo:kk + 1]).astype(np.int32)
                     cv2.polylines(frame, [trail], False, bgr(color), self.lw, cv2.LINE_AA)
+            if ev:  # a violation: box in the violation colour from then on
+                cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(VIOLATION), self.lw + 1, cv2.LINE_AA)
+            y = pts[:, 1].min() - 6 * self.k
             if label:
                 big, small, fill, ink = label
-                self._pill(frame, pts[:, 0].mean(), pts[:, 1].min() - 6 * self.k, big, small, fill, ink, center=True)
+                self._pill(frame, pts[:, 0].mean(), y, big, small, fill, ink, center=True)
+                y -= self.pills.make(big, small, fill, ink)[1][1] + 4 * self.k
+            for e in ev:
+                if t - e["t"] <= self.rs.label_hold_s:
+                    self._pill(frame, pts[:, 0].mean(), y, e["big"], e["small"], VIOLATION, WHITE, center=True)
+                    y -= self.pills.make(e["big"], e["small"], VIOLATION, WHITE)[1][1] + 4 * self.k
 
         if self.rs.show_hud:
             self._pill(frame, 12 * self.k, 44 * self.k, f"{t:.2f} s", f"frame {n} · {self.fps:g} fps", INK, WHITE, 0.7)
@@ -529,13 +592,14 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
                                            paths=cal.path_geoms)
     if rs.panel != "none" and rs.show_margin:
         margin_of_error(cfg, results, renders, cal, fps)
+    viol = find_violations(cfg, cal, tracks, renders, fps, out, reporter)
     tf = np.load(out / "transforms.npz")
     transforms = {"frames": tf["frames"], "T": tf["T"]}
 
     W = max(2, int(round(info.width * rs.scale / 2)) * 2)
     H = max(2, int(round(info.height * rs.scale / 2)) * 2)
     typo = Typography(rs.font)
-    overlay = Overlay(cfg, fps, cal, renders, tracks, transforms, (W, H), (info.width, info.height), typo)
+    overlay = Overlay(cfg, fps, cal, renders, tracks, transforms, (W, H), (info.width, info.height), typo, viol)
 
     panel = None
     out_w = W
@@ -607,6 +671,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms)
+    viol = find_violations(cfg, cal, tracks, renders, fps, out, sample=False) or {}
     tf = np.load(out / "transforms.npz")
     T_inv = np.linalg.inv(tf["T"]) if len(tf["T"]) else np.zeros((0, 3, 3))
     H_inv = np.linalg.inv(cal.H)
@@ -643,4 +708,13 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
         "det_frame": boxes["frame"].astype(int).tolist(), "det_tid": boxes["track_id"].astype(int).tolist(),
         "det_corners": r1(boxes[CORNER_COLS].to_numpy()),
         "tracks": track_info,
+        "red_lights": [{"name": s.name, "lights": [[*lt.px, lt.radius_px] for lt in s.lights],
+                        "stop_lines": [{"px": r1(sl.points), "direction": sl.direction} for sl in s.stop_lines
+                                       if len(sl.points) >= 2],
+                        "phases": viol["lights"][k]["phases"] if k < len(viol.get("lights", [])) else []}
+                       for k, s in enumerate(cfg.calibration.red_lights)],
+        "solid_lines": [{"name": s.name, "px": r1(s.points)} for s in cfg.calibration.solid_lines
+                        if len(s.points) >= 2],
+        "events": {str(tid): ev for tid, ev in violation_events(viol).items()},
+        "label_hold_s": cfg.render.label_hold_s,
     }

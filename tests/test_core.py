@@ -361,8 +361,19 @@ def test_auto_detector_prefers_top_down_model_when_close():
     auto = AutoDetector(DetectionSettings(), [coco, obb, vis], ["coco", "obb", "vis"], topdown=1)
     info = auto.choose_primary(frames)
     assert info["primary"] == "obb" and info["secondary"] == "vis"
+    # ... unless a fill-in model for top-down footage is named
+    auto = AutoDetector(DetectionSettings(auto_topdown_fill="coco"), [coco, obb, vis], ["coco", "obb", "vis"], topdown=1)
+    info = auto.choose_primary(frames)
+    assert info["primary"] == "obb" and info["secondary"] == "coco"
     # oblique: the top-down model finds little (0.3 vs 2.2) -> best scorer wins, runner-up fills
     obb_weak = _FakeDet([_box(0, 0, conf=0.3)])
     auto = AutoDetector(DetectionSettings(), [coco, obb_weak, vis], ["coco", "obb", "vis"], topdown=1)
     info = auto.choose_primary(frames)
     assert info["primary"] == "vis" and info["secondary"] in ("coco", "obb")
+
+
+def test_old_auto_model_list_gets_visdrone():
+    from speedcam.config import DetectionSettings
+
+    assert DetectionSettings(auto_models=["yolo11x.pt", "yolo11x-obb.pt"]).auto_models[-1] == "visdrone"
+    assert DetectionSettings(auto_models=["yolo11x.pt"]).auto_models == ["yolo11x.pt"]

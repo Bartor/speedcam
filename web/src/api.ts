@@ -13,7 +13,20 @@ export interface PathDraw {
 }
 /** One colour per path of motion, in order (distinct from the green/amber/red speed colours). */
 export const PATH_COLORS = ["#00c8ff", "#b98cff", "#ff3cc8", "#78e6ff", "#ffd278"];
+export interface TrafficLight { px: Pt; radius_px: number }
+export type StopDirection = "both" | "forward" | "reverse";
+export interface StopLine { points: Pt[]; direction: StopDirection }
+export interface RedLightSetup {
+  name: string; lights: TrafficLight[]; stop_lines: StopLine[];
+  state_source: "colour" | "manual"; red_intervals: [number, number][];
+}
+export interface SolidLine { name: string; points: Pt[] }
+/** One colour per red-light setup (stop lines are drawn in the light's phase colour once analysed). */
+export const LIGHT_COLORS = ["#ff5a5a", "#ff9f1a", "#f368e0", "#ff7f7f"];
+export const SOLID_COLOR = "#f2f2f2";
 export interface Calibration {
+  red_lights?: RedLightSetup[];
+  solid_lines?: SolidLine[];
   polygon?: Polygon | null;
   paths?: MotionPath[];
   path_clip_to_calibration?: boolean;
@@ -46,6 +59,7 @@ export interface ProjectConfig {
   calibration: Calibration;
   detection: Record<string, any>; tracking: Record<string, any>; stabilization: Record<string, any>;
   speed: Record<string, any>; render: Record<string, any>; stats: Record<string, any>;
+  violations?: Record<string, any>;
 }
 
 export interface Job {
@@ -82,6 +96,7 @@ export interface Vehicle {
   d_max_m: number | null; speed_trend_pct: number | null;
   profile: { t: number[]; d: number[]; v: number[] } | null;
   path?: string; coverage_pct?: number;
+  violations?: string[];
   // margin of error (k=2, ~95 %); *_u_lower adds the one-sided uncorrected parallax bias below the value
   speed_avg_se_kmh?: number | null;
   speed_max_u_kmh?: number; speed_max_u_lower_kmh?: number; speed_avg_u_kmh?: number; speed_avg_u_lower_kmh?: number;
@@ -124,6 +139,22 @@ export interface Stats {
   min?: number; max?: number; required_n?: Record<string, number>; confidence: number; permitted_error_kmh: number;
 }
 
+export interface Phase { t0: number; t1: number; state: "red" | "amber" | "green" | "not red" | "unknown" }
+export interface RedLightEvent {
+  type: "red_light"; name: string; line: number; track_id: number; class: string; t_s: number; t_centre_s: number;
+  frame: number; light: string; phase_for_s: number | null; violation: boolean | null; speed_kmh: number | null;
+}
+export interface SolidLineEvent {
+  type: "solid_line"; name: string; track_id: number; class: string; t_s: number; frame: number;
+  how: "crossed" | "straddled"; duration_s: number | null; max_over_m: number | null; speed_kmh: number | null;
+}
+export interface Violations {
+  lights: { name: string; source: "colour" | "manual"; read_share: number | null; phases: Phase[] }[];
+  red_light: RedLightEvent[]; solid_line: SolidLineEvent[];
+  n_red_light: number; n_solid_line: number; warnings: string[];
+}
+export const PHASE_COLORS: Record<string, string> = { red: "#eb4034", amber: "#ffb020", green: "#2ecc71", "not red": "#5b6270", unknown: "#3a3f48" };
+
 export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
@@ -131,6 +162,7 @@ export interface Results {
   by_path?: Record<string, { avg: Stats; max: Stats }>;
   uncertainty?: UncertaintySummary | null;
   calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
+  violations?: Violations | null;
   run: Record<string, any>; calibration: CalibrationResult;
   render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string } | null;
 }
@@ -164,6 +196,9 @@ export const api = {
   create: (source: string, name?: string) => req<Project>("POST", "/api/projects", { source, name }),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),
   patch: (id: string, body: Record<string, unknown>) => req<Project>("PATCH", `/api/projects/${id}`, body),
+  readLights: (id: string, frame: number) =>
+    req<{ frame: number; stabilized: boolean; setups: { name: string; state: string; counts: [number, number, number][] }[] }>(
+      "GET", `/api/projects/${id}/lights/${frame}`),
   putCalibration: (id: string, cal: Calibration) =>
     req<{ saved: boolean; result: CalibrationResult }>("PUT", `/api/projects/${id}/calibration`, cal),
   analyze: (id: string) => req<Job>("POST", `/api/projects/${id}/analyze`),

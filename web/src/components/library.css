@@ -44,3 +44,18 @@
 .path-item:last-of-type { border-bottom: none; }
 .path-name { font-weight: 600; background: transparent; border-color: transparent; padding: 2px 4px; }
 .path-name:hover, .path-name:focus { border-color: var(--border); background: var(--bg); }
+
+/* violation rules (calibrate side panel) */
+.rule-setup { display: flex; flex-direction: column; gap: 6px; padding: 8px; margin: 0 -8px; border-radius: var(--r-md); border-bottom: none; cursor: default; }
+.rule-setup.active { background: var(--inset); box-shadow: inset 2px 0 0 var(--accent, #4aa3ff); }
+.rule-setup .seg-ctl { align-self: flex-start; }
+.phase-chip { padding: 1px 8px; border-radius: 999px; color: #fff; font-weight: 600; font-size: var(--fs-sm); text-transform: capitalize; }
+.light-counts { display: inline-flex; gap: 6px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+/* violations (results) */
+.phase-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.phase-name { min-width: 120px; font-weight: 600; font-size: var(--fs-sm); }
+.phase-bar { position: relative; flex: 1; height: 14px; border-radius: 4px; background: var(--inset); overflow: hidden; cursor: pointer; }
+.phase-seg { position: absolute; top: 0; bottom: 0; }
+.phase-event { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #ff285a; }
+.phase-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .9; pointer-events: none; }

@@ -7,6 +7,7 @@ import Histogram from "../components/Histogram";
 import ProgressBar from "../components/ProgressBar";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
 import SpeedProfile from "../components/SpeedProfile";
+import ViolationsPanel from "../components/ViolationsPanel";
 
 interface Props { project: Project; onChanged: (p: Project) => void }
 
@@ -64,12 +65,13 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   const { frame, mediaTime } = useVideoFrame(video, useRender ? (res!.render!.output_fps) : project.info.container_fps);
   const tNow = useRender ? mediaTime * res!.render!.playback_speed : frame / fps;
 
-  const seekTo = (v: Vehicle) => {
+  const seekTime = (t: number) => {
     if (!video) return;
-    const t = Math.max(0, v.t_entry_s - 0.3);
+    t = Math.max(0, t);
     video.currentTime = useRender ? t / res!.render!.playback_speed : (t * fps + 0.5) / project.info.container_fps;
     video.pause();
   };
+  const seekTo = (v: Vehicle) => seekTime(v.t_entry_s - 0.3);
 
   const rows = useMemo(() => {
     if (!res) return [];
@@ -150,7 +152,14 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           </section>
         )}
 
-        <section className="panel">
+        {res.violations && (
+          <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
+            onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
+            hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
+            solidMode={(project.config.violations as any)?.solid_mode ?? "centre"} />
+        )}
+
+        {(res.vehicles.length > 0 || !res.violations) && <section className="panel">
           <div className="panel-head">
             <h3>Vehicles</h3>
             <span className="tag">{rows.length}{rows.length !== res.vehicles.length ? ` of ${res.vehicles.length}` : ""}</span>
@@ -197,7 +206,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                         </td>;
                       })}
                       <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
-                        {v.valid && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}</td>
+                        {v.valid && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}
+                        {v.violations?.map((x) => <span key={x} className="status bad" title="Violation (see Violations above)">⛔ {x}</span>)}</td>
                     </tr>
                   );
                 })}
@@ -215,7 +225,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
               </div>
             )}
           </div>
-        </section>
+        </section>}
 
         <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
       </div>
@@ -260,10 +270,11 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           <div className="export-grid">
             <a className="button" href={api.fileUrl(project.id, "results.csv")}><span className="dl-ico">↓</span>results.csv</a>
             <a className="button" href={api.fileUrl(project.id, "results.json")}><span className="dl-ico">↓</span>results.json</a>
+            {res.violations && <a className="button" href={api.fileUrl(project.id, "violations.csv")}><span className="dl-ico">↓</span>violations.csv</a>}
             {res.render && <a className="button" href={api.fileUrl(project.id, "render.mp4")}><span className="dl-ico">↓</span>render.mp4</a>}
           </div>
           <div className="row">
-            <button onClick={recompute} title="Re-run speed estimation from stored tracks (after editing lines, calibration or thresholds)">Recompute speeds</button>
+            <button onClick={recompute} title="Re-run speeds and violation checks from stored tracks (after editing lines, lights, calibration or thresholds). Lights added or moved since the analysis are read from the video, which takes a minute.">Recompute</button>
           </div>
         </section>
 

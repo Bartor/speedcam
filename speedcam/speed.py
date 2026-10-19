@@ -135,6 +135,8 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         return next((r for r in tries if r.crossed == "short"), tries[0])
     inst = momentary_speed(P_raw, fps, s.momentary_window_s)
     render = TrackRender(frames=full, world=P, inst_kmh=inst, cls=cls)
+    if line_a is None or line_b is None:  # no speed geometry: violation checks only
+        return render
     ca = first_crossing(t, P, line_a, s.line_extend)
     cb = first_crossing(t, P, line_b, s.line_extend)
     render.crossed = ("A" if ca else "") + ("B" if cb else "")

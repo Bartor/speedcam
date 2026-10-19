@@ -307,6 +307,16 @@ def calibrated_area_world(cal: Calibration, H: np.ndarray) -> Optional[np.ndarra
     return cv2.convexHull(w).reshape(-1, 2)
 
 
-def has_measurement_geometry(cal: Calibration) -> bool:
+def has_speed_geometry(cal: Calibration) -> bool:
     """Lines A and B, or a path of motion."""
     return bool((cal.line_a and cal.line_b) or any(len(p.points) >= 2 for p in cal.paths))
+
+
+def has_violation_geometry(cal: Calibration) -> bool:
+    """A stop line of a red-light setup, or a solid line."""
+    return any(len(sl.points) >= 2 for r in cal.red_lights for sl in r.stop_lines) or         any(len(s.points) >= 2 for s in cal.solid_lines)
+
+
+def has_measurement_geometry(cal: Calibration) -> bool:
+    """Anything to measure: speeds (lines A/B or a path) or violations."""
+    return has_speed_geometry(cal) or has_violation_geometry(cal)

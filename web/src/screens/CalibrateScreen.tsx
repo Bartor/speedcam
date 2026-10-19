@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Calibration, CalibrationResult, fmt, MotionPath, PATH_COLORS, Project, useDebounced, useVideoFrame } from "../api";
+import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onNext: () => void }
 
-type ToolGroup = "nav" | "cal" | "lines" | "area";
+type ToolGroup = "nav" | "cal" | "lines" | "rules" | "area";
 const TOOLS: { key: Tool; label: string; hint: string; group: ToolGroup; color?: string; line?: boolean }[] = [
   { key: "move", group: "nav", label: "Move", hint: "Drag handles to adjust; drag empty space to pan." },
   { key: "polygon", group: "cal", color: "#b98cff", label: "Polygon", hint: "Click 4+ flat ground points (close with Enter, double-click or the first point), then type measured sides and diagonals. Corrects perspective: best for oblique views." },
@@ -14,10 +14,13 @@ const TOOLS: { key: Tool; label: string; hint: string; group: ToolGroup; color?:
   { key: "path", group: "lines", color: "#00c8ff", line: true, label: "Path", hint: "Click points along a road in the direction of travel (A → B); Enter or double-click to finish. Draw one per road (e.g. at an intersection). Vehicles inside the corridor are measured along the curve; replaces lines A/B." },
   { key: "lineA", group: "lines", color: "#00c8ff", line: true, label: "Line A", hint: "Click two points across the road for measurement line A." },
   { key: "lineB", group: "lines", color: "#ff3cc8", line: true, label: "Line B", hint: "Click two points across the road for measurement line B." },
+  { key: "light", group: "rules", color: "#ff5a5a", label: "Light", hint: "Click the middle of a traffic light's lamps; set the circle's radius in the side panel so it covers the lit lamps. Add every light showing the same signal to one setup." },
+  { key: "stopline", group: "rules", color: "#ff5a5a", line: true, label: "Stop line", hint: "Click points along the stop line (2 or more), Enter or double-click to finish. Crossing it while the setup's light is red counts as running the red." },
+  { key: "solid", group: "rules", color: SOLID_COLOR, line: true, label: "Solid line", hint: "Click points along a solid road marking, Enter or double-click to finish. Any vehicle crossing it is reported. Works best straight down." },
   { key: "roi", group: "area", color: "#4cd97b", label: "ROI", hint: "Click polygon corners; close with Enter, double-click or by clicking the first point." },
 ];
 const GROUPS: { key: ToolGroup; label?: string }[] = [
-  { key: "nav" }, { key: "cal", label: "Calibration" }, { key: "lines", label: "Measure" }, { key: "area", label: "Area" },
+  { key: "nav" }, { key: "cal", label: "Calibration" }, { key: "lines", label: "Measure" }, { key: "rules", label: "Violations" }, { key: "area", label: "Area" },
 ];
 
 export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
@@ -104,7 +107,40 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
     else c.paths![k] = { ...c.paths![k], ...patch };
     update(c);
   };
-  const ready = !!((hasPath || (cal.line_a && cal.line_b)) && !result.error && result.fit_ok !== false);
+  const setups = cal.red_lights ?? [];
+  const solids = cal.solid_lines ?? [];
+  const [activeSetup, setActiveSetup] = useState(0);
+  const setSetup = (s: number, patch: Partial<RedLightSetup> | null) => {
+    const c = structuredClone(cal);
+    if (patch === null) { c.red_lights!.splice(s, 1); setActiveSetup(Math.max(0, Math.min(activeSetup, c.red_lights!.length - 1))); }
+    else c.red_lights![s] = { ...c.red_lights![s], ...patch };
+    update(c);
+  };
+  const addSetup = () => {
+    const c = structuredClone(cal);
+    c.red_lights = [...setups, { name: `Light ${setups.length + 1}`, lights: [], stop_lines: [], state_source: "colour", red_intervals: [] }];
+    update(c);
+    setActiveSetup(c.red_lights.length - 1);
+    setTool("light");
+  };
+  const setSolid = (k: number, patch: Partial<SolidLine> | null) => {
+    const c = structuredClone(cal);
+    if (patch === null) c.solid_lines!.splice(k, 1);
+    else c.solid_lines![k] = { ...c.solid_lines![k], ...patch };
+    update(c);
+  };
+  const vcfg = (project.config.violations ?? {}) as Record<string, any>;
+  const setViolationSetting = async (patch: Record<string, any>) => onChanged(await api.patch(project.id, { violations: patch }));
+  // what each setup's lights read on the scrubbed frame
+  const [lightRead, setLightRead] = useState<{ frame: number; stabilized: boolean; setups: { state: string; counts: [number, number, number][] }[] } | null>(null);
+  const lightsKey = JSON.stringify(setups.map((s) => s.lights));
+  useEffect(() => {
+    if (!setups.some((s) => s.lights.length)) { setLightRead(null); return; }
+    const t = setTimeout(() => { api.readLights(project.id, scrub).then(setLightRead).catch(() => setLightRead(null)); }, 400);
+    return () => clearTimeout(t);
+  }, [scrub, lightsKey, saving === "saved"]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const hasRules = setups.some((s) => s.stop_lines.some((l) => l.points.length >= 2)) || solids.some((s) => s.points.length >= 2);
+  const ready = !!((hasPath || (cal.line_a && cal.line_b) || hasRules) && !result.error && result.fit_ok !== false);
   const hint = TOOLS.find((t) => t.key === tool)!.hint;
 
   return (
@@ -135,6 +171,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           onPolygonAdded={() => { setTool("move"); setTimeout(() => polyInputs.current[0]?.focus(), 0); }}
           onRectAdded={() => { setTool("move"); setTimeout(() => rectW.current?.focus(), 0); }} lineGapM={result.line_gap_m}
           pathsDraw={result.paths} onPathAdded={() => setTool("move")}
+          activeSetup={activeSetup} onRuleAdded={() => { if (tool !== "light") setTool("move"); }}
           selected={focusSeg !== null ? { kind: "seg", i: focusSeg } : null} />
         <div className="scrubber">
           {project.status.proxy_mp4 ? (
@@ -316,6 +353,114 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
+          <h3>Red lights {setups.length > 0 && <span className="muted small">({setups.length})</span>}</h3>
+          {setups.length === 0 && <p className="muted small">Mark a traffic light with the <b>Light</b> tool and its stop line with <b>Stop line</b>. A vehicle whose front reaches the stop line while the light is red is reported. Add one setup per signal group.</p>}
+          {setups.map((r, s) => {
+            const color = LIGHT_COLORS[s % LIGHT_COLORS.length];
+            const read = lightRead?.setups[s];
+            return (
+              <div key={s} className={`path-item rule-setup${s === activeSetup ? " active" : ""}`} onClick={() => setActiveSetup(s)}>
+                <div className="item-row">
+                  <span className="swatch" style={{ background: color }} />
+                  <input className="grow path-name" value={r.name} onChange={(e) => setSetup(s, { name: e.target.value })} title="Name, e.g. the approach" />
+                  <button className="x" title="Remove this setup" onClick={(e) => { e.stopPropagation(); setSetup(s, null); }}>✕</button>
+                </div>
+                <div className="seg-ctl small">
+                  <button className={r.state_source === "colour" ? "active" : ""} onClick={() => setSetup(s, { state_source: "colour" })}
+                    title="Read red/amber/green from the light's colour on every frame">From the video</button>
+                  <button className={r.state_source === "manual" ? "active" : ""} onClick={() => setSetup(s, { state_source: "manual" })}
+                    title="Type when the light was red, e.g. when it isn't visible in the shot">Typed red times</button>
+                </div>
+                {r.state_source === "colour" ? (
+                  <>
+                    {r.lights.length === 0 && <p className="warn-text small">No light marked: pick the <b>Light</b> tool and click the lamps.</p>}
+                    {r.lights.map((lt, i) => (
+                      <div key={i} className="item-row small">
+                        <span className="grow muted">Light {i + 1}</span>
+                        {read?.counts[i] && <LightCounts counts={read.counts[i]} />}
+                        <span title="Radius of the circle whose colour is read (px of the original video)">r</span>
+                        <input type="number" min={2} step={1} className="narrow" value={lt.radius_px}
+                          onChange={(e) => { const c = structuredClone(r); c.lights[i].radius_px = Math.max(2, parseFloat(e.target.value) || 12); setSetup(s, c); }} />
+                        <span className="muted">px</span>
+                        <button className="x" onClick={() => { const c = structuredClone(r); c.lights.splice(i, 1); setSetup(s, c); }}>✕</button>
+                      </div>
+                    ))}
+                    {read && r.lights.length > 0 && (
+                      <div className="item-row small">
+                        <span className="muted grow">At frame {lightRead!.frame}{lightRead!.stabilized ? "" : " (as drawn)"}</span>
+                        <span className="phase-chip" style={{ background: PHASE_COLORS[read.state] ?? PHASE_COLORS.unknown }}>{read.state}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="item-row small">
+                    <span className="muted" title="Seconds of real time, e.g. 12.0-18.5, 40-52">Red</span>
+                    <input key={JSON.stringify(r.red_intervals)} className="grow" placeholder="e.g. 12.0-18.5, 40-52"
+                      defaultValue={r.red_intervals.map(([a, b]) => `${a}-${b}`).join(", ")}
+                      onBlur={(e) => setSetup(s, { red_intervals: parseIntervals(e.target.value) })} />
+                    <span className="muted">s</span>
+                  </div>
+                )}
+                {r.stop_lines.length === 0 && <p className="warn-text small">No stop line: pick the <b>Stop line</b> tool.</p>}
+                {r.stop_lines.map((sl, l) => (
+                  <div key={l} className="item-row small">
+                    <span className="grow muted">Stop line {l + 1}</span>
+                    <select value={sl.direction} title="Which crossings count; the arrow on the line shows it"
+                      onChange={(e) => { const c = structuredClone(r); c.stop_lines[l].direction = e.target.value as StopDirection; setSetup(s, c); }}>
+                      <option value="both">both ways</option>
+                      <option value="forward">along the arrow</option>
+                      <option value="reverse">against the arrow</option>
+                    </select>
+                    {sl.direction !== "both" && <button className="ghost" title="Flip the direction"
+                      onClick={() => { const c = structuredClone(r); c.stop_lines[l].direction = sl.direction === "forward" ? "reverse" : "forward"; setSetup(s, c); }}>⇅</button>}
+                    <button className="x" onClick={() => { const c = structuredClone(r); c.stop_lines.splice(l, 1); setSetup(s, c); }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          <div className="row small">
+            <button onClick={addSetup}>+ Add red-light setup</button>
+            {setups.length > 0 && <span className="muted">New lights and stop lines go to <b>{setups[activeSetup]?.name}</b></span>}
+          </div>
+          {setups.length > 0 && (
+            <div className="item-row small">
+              <label className="item-row"><input type="checkbox" checked={!!vcfg.amber_is_red}
+                onChange={(e) => setViolationSetting({ amber_is_red: e.target.checked })} /><span>Amber counts as red</span></label>
+              <span className="grow" />
+              <span title="A vehicle entering this soon after the change to red isn't reported">Grace</span>
+              <input type="number" step="0.1" min={0} className="narrow" defaultValue={vcfg.red_grace_s ?? 0}
+                onBlur={(e) => setViolationSetting({ red_grace_s: Math.max(0, parseFloat(e.target.value) || 0) })} />
+              <span className="muted">s</span>
+            </div>
+          )}
+        </section>
+
+        <section className="panel">
+          <h3>Solid lines {solids.length > 0 && <span className="muted small">({solids.length})</span>}</h3>
+          {solids.length === 0 && <p className="muted small">Draw a solid road marking with the <b>Solid line</b> tool. Every vehicle that crosses it, anywhere along it, is reported.</p>}
+          {solids.map((sl, k) => (
+            <div key={k} className="item-row">
+              <span className="swatch" style={{ background: SOLID_COLOR }} />
+              <input className="grow path-name" value={sl.name} onChange={(e) => setSolid(k, { name: e.target.value })} />
+              <span className="muted small">{sl.points.length} pts</span>
+              <button className="x" onClick={() => setSolid(k, null)}>✕</button>
+            </div>
+          ))}
+          {solids.length > 0 && (
+            <>
+              <div className="seg-ctl small">
+                <button className={(vcfg.solid_mode ?? "centre") === "centre" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "centre" })}
+                  title="The vehicle's centre goes from one side to the other: a lane change across the line">Centre crosses</button>
+                <button className={vcfg.solid_mode === "wheels" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "wheels" })}
+                  title="Any part of the vehicle's box gets over the line, also without changing lanes (straddling). Needs straight-down footage, where the box is the vehicle's footprint.">Any part over</button>
+              </div>
+              <p className="muted small">A crossing only counts once the vehicle is {vcfg.hysteresis_m ?? 0.5} m clear of the line on both sides, so tracking wobble along a line isn't reported.</p>
+            </>
+          )}
+        </section>
+
+        <section className="panel">
           <h3>Measurement lines & ROI</h3>
           {(["line_a", "line_b"] as const).map((k) => (
             <div key={k} className="item-row">
@@ -336,9 +481,27 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </div>
         <div className="cal-foot">
           <button className="primary wide lg" disabled={!ready} onClick={onNext}>Continue to processing →</button>
-          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (polygon, rectangle, distances or control points) and a path or both lines."}</p>}
+          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (polygon, rectangle, distances or control points) and a path, both lines, a stop line or a solid line."}</p>}
         </div>
       </aside>
     </div>
+  );
+}
+
+/** "12.0-18.5, 40-52" -> [[12, 18.5], [40, 52]] */
+function parseIntervals(text: string): [number, number][] {
+  return text.split(/[,;]/).map((part) => part.trim().match(/^(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)$/))
+    .filter((m): m is RegExpMatchArray => !!m)
+    .map((m) => [parseFloat(m[1]), parseFloat(m[2])] as [number, number])
+    .filter(([a, b]) => b > a);
+}
+
+/** Lit pixels per colour inside a light's circle on the current frame. */
+function LightCounts({ counts }: { counts: [number, number, number] }) {
+  const names = ["red", "amber", "green"];
+  return (
+    <span className="light-counts" title="Bright pixels of each colour inside the circle on this frame">
+      {counts.map((n, i) => <span key={i} style={{ color: n > 0 ? PHASE_COLORS[names[i]] : undefined }} className={n > 0 ? "" : "muted"}>{n}</span>)}
+    </span>
   );
 }

@@ -196,6 +196,36 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         return FileResponse(f, media_type="image/png" if fmt == "png" else "image/jpeg",
                             headers={"Cache-Control": "max-age=3600"})
 
+    @app.get("/api/projects/{pid}/lights/{n}")
+    def read_lights(pid: str, n: int):
+        """What each red-light setup's lights show on frame n: to check the circles and thresholds."""
+        import numpy as np
+
+        from ..violations import LightSampler, light_list, state_name
+
+        d = _dir(pid)
+        cfg = store.config(pid)
+        try:
+            img = store.grabber(pid).get(n)
+        except (IndexError, EOFError):
+            raise HTTPException(404, f"frame {n} not available")
+        T = None  # light circles are in reference px; follow the camera if the clip was stabilized
+        if (d / "transforms.npz").exists():
+            tf = np.load(d / "transforms.npz")
+            k = np.nonzero(tf["frames"] == n)[0]
+            if len(k):
+                T = tf["T"][k[0]]
+        counts = LightSampler(cfg.calibration, cfg.violations).sample(img, T)
+        order = light_list(cfg.calibration)
+        vs = cfg.violations
+        out = []
+        for s, setup in enumerate(cfg.calibration.red_lights):
+            c = [counts[j].tolist() for j, (si, _) in enumerate(order) if si == s]
+            total = np.sum(c, 0) if c else np.zeros(3)
+            out.append({"name": setup.name, "counts": c,
+                        "state": state_name(int(np.argmax(total))) if total.max() >= vs.light_min_pixels else "unknown"})
+        return {"frame": n, "stabilized": T is not None, "setups": out}
+
     @app.get("/api/projects/{pid}/proxy.mp4")
     def get_proxy(pid: str):
         p = _dir(pid) / "proxy.mp4"
@@ -222,7 +252,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
         if not calib.has_measurement_geometry(cfg.calibration):
-            raise HTTPException(400, "Draw a path of motion, or lines A and B, first")
+            raise HTTPException(400, "Draw a path of motion, lines A and B, a stop line or a solid line first")
         try:
             res = calib.compute(cfg.calibration)
         except ValueError as e:
@@ -239,7 +269,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
         if not calib.has_measurement_geometry(cfg.calibration):
-            raise HTTPException(400, "Draw a path of motion, or lines A and B, first")
+            raise HTTPException(400, "Draw a path of motion, lines A and B, a stop line or a solid line first")
         n = frame if frame is not None else cfg.calibration.reference_frame
         return jobs.submit(pid, "preview", d, {"frame": n, "seconds": seconds}).public()
 

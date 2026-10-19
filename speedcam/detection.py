@@ -254,7 +254,11 @@ class AutoDetector:
         td = self.topdown
         self.primary = td if td is not None and self.scores[td] >= self.s.auto_topdown_share * self.scores[best] else best
         rest = [k for k in range(len(self.detectors)) if k != self.primary]
-        self.secondary = max(rest, key=lambda k: self.scores[k]) if rest else None
+        fill = self.s.auto_topdown_fill
+        if self.primary == td and fill in self.names and self.names.index(fill) in rest:
+            self.secondary = self.names.index(fill)
+        else:
+            self.secondary = max(rest, key=lambda k: self.scores[k]) if rest else None
         per = max(len(frames), 1)
         return {"primary": self.names[self.primary],
                 "secondary": None if self.secondary is None else self.names[self.secondary],

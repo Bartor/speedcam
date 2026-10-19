@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { PATH_COLORS, Pt } from "../api";
+import { Phase, PATH_COLORS, PHASE_COLORS, Pt } from "../api";
 
 export interface OverlayData {
   width: number; height: number; capture_fps: number; container_fps: number;
@@ -13,7 +13,14 @@ export interface OverlayData {
     t_first: number | null; t_second: number | null; speed: number | null; speed_max?: number | null;
     dt: number | null; valid: boolean | null;
   }>;
+  red_lights?: { name: string; lights: [number, number, number][]; stop_lines: { px: number[]; direction: string }[]; phases: Phase[] }[];
+  solid_lines?: { name: string; px: number[] }[];
+  events?: Record<string, { t: number; big: string; small: string; line: string }[]>;
+  label_hold_s?: number;
 }
+
+const VIOLATION = "#ff285a";
+const phaseAt = (phases: Phase[], t: number) => phases.find((p) => p.t0 <= t && t < p.t1)?.state ?? "unknown";
 
 const LINE_A = "#00c8ff", LINE_B = "#ff3cc8", GREY = "#aaaaaa";
 
@@ -94,11 +101,31 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
     });
 
     const t = frame / data.capture_fps;
+    const hold = data.label_hold_s ?? 2.5;
+    // solid lines (flash when crossed) and red-light setups in the colour of the light's phase
+    const flat = (flatPts: number[], color: string, w: number) => {
+      ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+      for (let i = 0; i < flatPts.length; i += 2) { const p = P(flatPts[i], flatPts[i + 1]); if (i) ctx.lineTo(...p); else ctx.moveTo(...p); }
+      ctx.stroke();
+    };
+    const hot = new Set(Object.values(data.events ?? {}).flat().filter((e) => e.big === "SOLID LINE" && t >= e.t && t - e.t <= hold).map((e) => e.line));
+    data.solid_lines?.forEach((sl) => { flat(sl.px, "rgba(0,0,0,.75)", 5); flat(sl.px, hot.has(sl.name) ? VIOLATION : "#f2f2f2", 2.5); });
+    data.red_lights?.forEach((r) => {
+      const color = PHASE_COLORS[phaseAt(r.phases, t)] ?? PHASE_COLORS.unknown;
+      r.stop_lines.forEach((sl) => { flat(sl.px, "rgba(0,0,0,.75)", 6); flat(sl.px, color, 3.5); });
+      r.lights.forEach(([x, y, rad]) => {
+        const c = P(x, y);
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(5, rad * s + 3), 0, Math.PI * 2); ctx.stroke();
+      });
+    });
+
     for (const i of byFrame.get(frame) ?? []) {
       const tid = data.det_tid[i];
       const tr = data.tracks[String(tid)];
       const c = data.det_corners.slice(i * 8, i * 8 + 8);
       let color = "#ffffff", text = `#${tid}${tr ? ` ${tr.cls}` : ""}`;
+      const ev = (data.events?.[String(tid)] ?? []).filter((e) => t >= e.t);
       if (tr && tr.speed !== null && tr.t_first !== null && tr.t_second !== null) {
         if (t >= tr.t_second) {
           const vmax = tr.speed_max ?? tr.speed;
@@ -126,7 +153,13 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
       }
       // top-left of the bounding rectangle: picking the "highest corner" flips between the
       // two near-equal top corners from frame to frame and makes labels jump
-      label(Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])) - 8, text, color);
+      const lx = Math.min(...pts.map((p) => p[0])), ly = Math.min(...pts.map((p) => p[1])) - 8;
+      label(lx, ly, text, color);
+      if (ev.length) {
+        ctx.strokeStyle = VIOLATION; ctx.lineWidth = 3;
+        ctx.beginPath(); pts.forEach((p, k) => (k ? ctx.lineTo(...p) : ctx.moveTo(...p))); ctx.closePath(); ctx.stroke();
+        ev.filter((e) => t - e.t <= hold).forEach((e, k) => label(lx, ly - (fs + 8) * (k + 1), `${e.big} · ${e.small}`, VIOLATION));
+      }
     }
   });
 

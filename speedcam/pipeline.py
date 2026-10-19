@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import calibration, uncertainty
+from . import calibration, uncertainty, violations
 from .config import ProjectConfig
 from .detection import make_detector
 from .flow import FlowTracker, reference_positions
@@ -167,8 +167,9 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         reporter.log(m, "warning")
 
     cal = calibration.compute(cfg.calibration, (info.width, info.height))
-    if not cal.path_geoms and (cal.line_a_world is None or cal.line_b_world is None):
-        raise ValueError("Draw a path of motion, or measurement lines A and B, in the calibration")
+    if not calibration.has_measurement_geometry(cfg.calibration):
+        raise ValueError("Draw a path of motion, measurement lines A and B, a stop line or a solid line "
+                         "in the calibration")
     if not cal.fit_ok:
         raise ValueError(cal.warnings[0])
     roi = np.array(cfg.calibration.roi, np.float32) if cfg.calibration.roi and len(cfg.calibration.roi) >= 3 else None
@@ -218,6 +219,10 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     trail_len = int(round(fps))  # 1 s of history
     seen_tracks: set[int] = set()
     state = {"done": 0, "n_dets": 0, "last_preview": 0.0}
+    # traffic-light colours, read on every frame while it's decoded anyway
+    sampler = violations.LightSampler(cfg.calibration, cfg.violations) if violations.needs_samples(cfg.calibration) else None
+    light_frames: list[int] = []
+    light_counts: list[np.ndarray] = []
 
     def per_frame(i: int, frame: np.ndarray, dets) -> None:
         """Stabilize, track and record one frame. Called strictly in frame order (tracking needs it)."""
@@ -234,6 +239,9 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
             T = np.eye(3)
         T_frames.append(i)
         T_all.append(T)
+        if sampler:
+            light_frames.append(i)
+            light_counts.append(sampler.sample(frame, T))
 
         if len(dets):
             corners_ref = transform_points(T, dets.corners)
@@ -290,7 +298,8 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
                     lines += [("", transform_points(T_inv, e), (160, 160, 160)) for e in d["corridor_px"]]
             else:
                 lines = [(n, transform_points(T_inv, np.array(l, float)), col) for n, l, col in
-                         (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))]
+                         (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))
+                         if l]
             text = f"frame {i}  t {i / fps:.2f} s  {len(dets)} det  {len(live)} tracked  {len(seen_tracks)} tracks so far"
             reporter.preview(_preview_jpeg(frame, dets.corners, ids, trails, lines, text))
 
@@ -334,17 +343,20 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     if stab_rows:
         pd.DataFrame(stab_rows, columns=["frame", "ok", "inliers", "source"]).to_csv(
             out / "stabilization.csv", index=False)
+    if sampler:
+        violations.save_samples(out, violations.lights_key(cfg.calibration, cfg.violations), light_frames, light_counts)
 
     reporter.progress("computing speeds", 0, 1)
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms)
     budget = margin_of_error(cfg, results, renders, cal, fps)
+    viol = find_violations(cfg, cal, df, renders, fps, out, reporter)
     n_fail = sum(1 for r in stab_rows if not r[1])
     if pts_anomalies:
         reporter.log(f"{len(pts_anomalies)} frames have container timestamps off the expected grid "
                      "(possible dropped/duplicated frames)", "warning")
 
-    summary = write_results(out, cfg, results, info, fps, cal, timing_msgs, budget, {
+    summary = write_results(out, cfg, results, info, fps, cal, timing_msgs, budget, viol, {
         "frames": done, "registration_failures": n_fail,
         "detections_per_frame": n_dets / max(done, 1), **track_diagnostics(df, renders),
         "camera_drift": camera_drift(drift, cal.m_per_px),
@@ -355,6 +367,20 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     return summary
 
 
+def find_violations(cfg: ProjectConfig, cal, df: pd.DataFrame, renders: dict, fps: float, out: Path,
+                    reporter: Optional[Reporter] = None, sample: bool = True) -> Optional[dict]:
+    """Red-light running and solid-line crossings (see violations.py); None when none are set up.
+    With `sample`, lights added or moved since the analysis are read from the video (decode only)."""
+    c = cfg.calibration
+    if not (c.red_lights or c.solid_lines):
+        return None
+    samples = violations.load_samples(out, violations.lights_key(c, cfg.violations))
+    if samples is None and sample and violations.needs_samples(c):
+        samples = violations.sample_lights(cfg, out, reporter)
+    frames = np.load(out / "transforms.npz")["frames"]
+    return violations.detect(cfg, cal, df, renders, fps, samples, frames)
+
+
 def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal, fps: float) -> dict:
     """Per-vehicle uncertainty budget (fills the speed_*_u_kmh fields); see uncertainty.py."""
     return uncertainty.annotate(results, renders, cfg.calibration, cal, fps, cfg.uncertainty,
@@ -362,14 +388,29 @@ def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal,
 
 
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
-                  timing_msgs: list[str], budget: Optional[dict], run: dict) -> dict:
+                  timing_msgs: list[str], budget: Optional[dict], viol: Optional[dict], run: dict) -> dict:
     cols = ["track_id", "class", "path", "direction", "coverage_pct", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
             "path_length_m", "chord_m", "speed_kmh", "speed_avg_u_kmh", "speed_avg_u_lower_kmh",
             "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
             "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct",
             "t_max_s", "d_max_m", "speed_trend_pct", "speed_line_kmh", "disagreement_pct",
-            "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags"]
-    pd.DataFrame(results, columns=cols).to_csv(out / "results.csv", index=False, float_format="%.4f")
+            "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags", "violations"]
+    # each measured vehicle lists its violations, e.g. "red light (Main St)"
+    tags: dict[int, list[str]] = {}
+    for e in (viol or {}).get("red_light", []):
+        if e["violation"]:
+            tags.setdefault(e["track_id"], []).append(f"red light ({e['name']})")
+    for e in (viol or {}).get("solid_line", []):
+        tags.setdefault(e["track_id"], []).append(f"solid line ({e['name']})")
+    for r in results:
+        r["violations"] = tags.get(r["track_id"], [])
+    if viol:
+        violations.write_csv(out, viol)
+    elif (out / "violations.csv").exists():
+        (out / "violations.csv").unlink()
+    table = pd.DataFrame(results, columns=cols)
+    table["violations"] = table["violations"].map(lambda v: "; ".join(v) if isinstance(v, list) else "")
+    table.to_csv(out / "results.csv", index=False, float_format="%.4f")
     valid = [r for r in results if r["valid"]]
     summary = {
         "source": cfg.source,
@@ -401,6 +442,7 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
         },
         "calibration_check": calibration_check(results),
         "uncertainty": budget,
+        "violations": viol,
         "vehicles": results,
     }
     (out / "results.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -421,8 +463,9 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
     run = {**prev.get("run", {}), **track_diagnostics(df, renders)}
     budget = margin_of_error(cfg, results, renders, cal, fps)
+    viol = find_violations(cfg, cal, df, renders, fps, out)
     return write_results(out, cfg, results, info, fps, cal, check_timing(info, fps, cfg.real_duration_s),
-                         budget, run)
+                         budget, viol, run)
 
 
 def camera_drift(drift_px: list[float], m_per_px: float) -> Optional[dict]:

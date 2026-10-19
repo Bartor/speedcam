@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calibration, PATH_COLORS, PathDraw, Pt } from "../api";
+import { Calibration, LIGHT_COLORS, PATH_COLORS, PathDraw, Pt, SOLID_COLOR, StopDirection } from "../api";
 
-export type Tool = "move" | "path" | "polygon" | "rect" | "segment" | "lineA" | "lineB" | "roi" | "point";
+export type Tool = "move" | "path" | "polygon" | "rect" | "segment" | "lineA" | "lineB" | "roi" | "point" | "light" | "stopline" | "solid";
 
 /** Tools that collect an open-ended list of corners, closed with Enter / double-click / first point. */
-const MIN_CORNERS: Partial<Record<Tool, number>> = { roi: 3, polygon: 4, path: 2 };
+const MIN_CORNERS: Partial<Record<Tool, number>> = { roi: 3, polygon: 4, path: 2, stopline: 2, solid: 2 };
+/** Open polylines: finished with Enter or a double-click, never closed on the first point. */
+const OPEN = new Set<Tool>(["path", "stopline", "solid"]);
+
+/** Arrow across a polyline's middle showing which crossings count (screen coordinates). */
+export function directionArrow(P: Pt[], dir: StopDirection): { from: Pt; to: Pt; heads: Pt[] } | null {
+  if (P.length < 2) return null;
+  const k = Math.floor((P.length - 1) / 2);
+  const [a, b] = [P[k], P[k + 1]];
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (len < 1e-6) return null;
+  const n: Pt = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];  // right of the line as drawn (y down)
+  const m: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const s = 16, from: Pt = [m[0] - n[0] * s, m[1] - n[1] * s], to: Pt = [m[0] + n[0] * s, m[1] + n[1] * s];
+  const heads = dir === "forward" ? [to] : dir === "reverse" ? [from] : [from, to];
+  return { from, to, heads };
+}
 
 /** Four control points with world coords (0,0) (W,0) (W,L) (0,L): a rectangle calibration. */
 export function rectDims(cal: Calibration): { w: number; l: number } | null {
@@ -21,6 +37,9 @@ type Handle =
   | { kind: "roi"; i: number }
   | { kind: "poly"; i: number }
   | { kind: "path"; k: number; i: number }
+  | { kind: "light"; s: number; i: number }
+  | { kind: "stop"; s: number; l: number; i: number }
+  | { kind: "solid"; k: number; i: number }
   | { kind: "pt"; i: number };
 
 interface Props {
@@ -35,13 +54,16 @@ interface Props {
   /** per path: smooth curve, measured part and corridor edges as computed by the server (reference px) */
   pathsDraw?: PathDraw[];
   onPathAdded?: (index: number) => void;
+  /** red-light setup that new lights and stop lines go to */
+  activeSetup?: number;
+  onRuleAdded?: () => void;
   selected?: { kind: string; i: number } | null;
 }
 
 const COLORS = { path: "#00c8ff", poly: "#b98cff", seg: "#f5c518", a: "#00c8ff", b: "#ff3cc8", roi: "#4cd97b", pt: "#ff8c3a", pending: "#ff5050" };
-const NEEDED: Partial<Record<Tool, number>> = { rect: 4, segment: 2, lineA: 2, lineB: 2, point: 1 };
+const NEEDED: Partial<Record<Tool, number>> = { rect: 4, segment: 2, lineA: 2, lineB: 2, point: 1, light: 1 };
 
-export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, pathsDraw, onPathAdded, selected }: Props) {
+export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, pathsDraw, onPathAdded, activeSetup = 0, onRuleAdded, selected }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -103,6 +125,11 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     cal.roi?.forEach((p, i) => out.push({ h: { kind: "roi", i }, p }));
     cal.polygon?.points.forEach((p, i) => out.push({ h: { kind: "poly", i }, p }));
     cal.paths?.forEach((pp, k) => pp.points.forEach((p, i) => out.push({ h: { kind: "path", k, i }, p })));
+    cal.red_lights?.forEach((r, s) => {
+      r.lights.forEach((lt, i) => out.push({ h: { kind: "light", s, i }, p: lt.px }));
+      r.stop_lines.forEach((sl, l) => sl.points.forEach((p, i) => out.push({ h: { kind: "stop", s, l, i }, p })));
+    });
+    cal.solid_lines?.forEach((sl, k) => sl.points.forEach((p, i) => out.push({ h: { kind: "solid", k, i }, p })));
     cal.points.forEach((c, i) => out.push({ h: { kind: "pt", i }, p: c.px }));
     return out;
   };
@@ -114,6 +141,9 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     else if (h.kind === "roi") c.roi![h.i] = p;
     else if (h.kind === "poly") c.polygon!.points[h.i] = p;
     else if (h.kind === "path") c.paths![h.k].points[h.i] = p;
+    else if (h.kind === "light") c.red_lights![h.s].lights[h.i].px = p;
+    else if (h.kind === "stop") c.red_lights![h.s].stop_lines[h.l].points[h.i] = p;
+    else if (h.kind === "solid") c.solid_lines![h.k].points[h.i] = p;
     else c.points[h.i].px = p;
     return c;
   };
@@ -141,11 +171,23 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     } else if (tool === "lineA") { c.line_a = [pts[0], pts[1]]; onChange(c); }
     else if (tool === "lineB") { c.line_b = [pts[0], pts[1]]; onChange(c); }
     else if (tool === "point") { c.points.push({ px: pts[0], world: [0, 0] }); onChange(c); }
-    else if (tool === "roi" || tool === "polygon" || tool === "path") {
+    else if (tool === "light") {
+      setupFor(c).lights.push({ px: pts[0], radius_px: 12 });
+      onChange(c);
+      onRuleAdded?.();
+    }
+    else if (tool === "roi" || tool === "polygon" || tool === "path" || tool === "stopline" || tool === "solid") {
       // a double-click adds two near-identical points before closing: drop them
       const clean = pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 2);
       if (clean.length >= MIN_CORNERS[tool]!) {
         if (tool === "roi") c.roi = clean;
+        else if (tool === "stopline") setupFor(c).stop_lines.push({ points: clean, direction: "both" });
+        else if (tool === "solid") {
+          const list = c.solid_lines ?? [];
+          let n = list.length + 1;
+          while (list.some((p) => p.name === `Solid line ${n}`)) n++;
+          c.solid_lines = [...list, { name: `Solid line ${n}`, points: clean }];
+        }
         else if (tool === "path") {
           const list = c.paths ?? [];
           let n = list.length + 1;
@@ -156,9 +198,20 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
         onChange(c);
         if (tool === "polygon") onPolygonAdded?.();
         if (tool === "path") onPathAdded?.(c.paths!.length - 1);
+        if (tool === "stopline" || tool === "solid") onRuleAdded?.();
       }
     }
     setPending([]);
+  };
+
+  /** the active red-light setup of `c`, created when there is none yet */
+  const setupFor = (c: Calibration) => {
+    c.red_lights = c.red_lights ?? [];
+    if (!c.red_lights[activeSetup]) {
+      c.red_lights.push({ name: `Light ${c.red_lights.length + 1}`, lights: [], stop_lines: [], state_source: "colour", red_intervals: [] });
+      return c.red_lights[c.red_lights.length - 1];
+    }
+    return c.red_lights[activeSetup];
   };
 
   const local = (e: React.MouseEvent | React.WheelEvent) => {
@@ -181,7 +234,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     }
     const p = toImage(sx, sy);
     if (corners) {
-      if (pending.length >= corners && tool !== "path") {
+      if (pending.length >= corners && !OPEN.has(tool)) {
         const [fx, fy] = toScreen(pending[0]);
         if (Math.hypot(fx - sx, fy - sy) < 10) return commit(pending);
       }
@@ -334,6 +387,46 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
       label(l[0], name === "A" && lineGapM ? `A · gap ${lineGapM.toFixed(2)} m` : name, color);
     });
 
+    // solid lines and red-light setups (lights, stop lines with the counted direction)
+    (cal.solid_lines ?? []).forEach((sl) => {
+      if (sl.points.length < 1) return;
+      polyline(sl.points, "rgba(0,0,0,.8)", 6);
+      polyline(sl.points, SOLID_COLOR, 3);
+      sl.points.forEach((p) => dot(p, SOLID_COLOR, 3.5));
+      label(sl.points[0], sl.name, SOLID_COLOR);
+    });
+    (cal.red_lights ?? []).forEach((r, s) => {
+      const color = LIGHT_COLORS[s % LIGHT_COLORS.length];
+      const active = s === activeSetup && (tool === "light" || tool === "stopline");
+      r.stop_lines.forEach((sl) => {
+        polyline(sl.points, "rgba(0,0,0,.8)", 7);
+        polyline(sl.points, color, active ? 4.5 : 3.5);
+        sl.points.forEach((p) => dot(p, color, 3.5));
+        const ar = directionArrow(sl.points.map(toScreen), sl.direction);
+        if (ar) {
+          ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(...ar.from); ctx.lineTo(...ar.to); ctx.stroke();
+          ar.heads.forEach((hd) => {
+            const back = hd === ar.to ? ar.from : ar.to;
+            const ux = (hd[0] - back[0]) / 32, uy = (hd[1] - back[1]) / 32;
+            ctx.beginPath(); ctx.moveTo(hd[0] + ux * 6, hd[1] + uy * 6);
+            ctx.lineTo(hd[0] - uy * 5, hd[1] + ux * 5); ctx.lineTo(hd[0] + uy * 5, hd[1] - ux * 5); ctx.closePath(); ctx.fill();
+          });
+        }
+        if (sl.points.length) label(sl.points[sl.points.length - 1], `${r.name} · stop line`, color);
+      });
+      r.lights.forEach((lt) => {
+        const [x, y] = toScreen(lt.px);
+        const rr = Math.max(6, lt.radius_px * v.zoom);
+        ctx.strokeStyle = "rgba(0,0,0,.8)"; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = color; ctx.lineWidth = active ? 2.5 : 2;
+        ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.stroke();
+        dot(lt.px, color, 2.5);
+        label([lt.px[0] + lt.radius_px, lt.px[1] - lt.radius_px], r.name, color);
+      });
+    });
+
     // in-progress clicks + rubber band
     const m = mouse.current;
     const cursor = toImage(m.sx, m.sy);
@@ -341,7 +434,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
       const color = COLORS.pending;
       pending.forEach((p, i) => { dot(p, color); if (i) line(pending[i - 1], p, color, 1.5); });
       if (m.inside) line(pending[pending.length - 1], cursor, color, 1, [5, 4]);
-      if (((MIN_CORNERS[tool] && tool !== "path") || tool === "rect") && pending.length >= 2 && m.inside) line(cursor, pending[0], color, 1, [2, 4]);
+      if (((MIN_CORNERS[tool] && !OPEN.has(tool)) || tool === "rect") && pending.length >= 2 && m.inside) line(cursor, pending[0], color, 1, [2, 4]);
     }
 
     // loupe for precise placement

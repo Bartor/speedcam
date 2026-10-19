@@ -43,12 +43,17 @@ down, useless otherwise) and the VisDrone-trained model below, when its weights 
 installed. For each clip it samples 12 frames and scores each model by the sum of its
 detection confidences. The top-down model becomes the primary whenever it scores at
 least 35% of the best model (`auto_topdown_share`), since it holds cars under trees
-better straight down; otherwise the best scorer does. The runner-up fills in: on every
-frame the primary's boxes are kept, and the second model only adds vehicles the
-primary missed, so each vehicle keeps a consistent box. It costs about twice the GPU
+better straight down; otherwise the best scorer does. The runner-up fills in (COCO when
+the top-down model leads, see below): on every frame the primary's boxes are kept, and
+the second model only adds vehicles the primary missed, so each vehicle keeps a
+consistent box. It costs about twice the GPU
 time of one model. On ten real clips the top-down share was 0.00-0.22 on oblique
 footage and 0.54 on the straight-down clip (0457), which got the top-down model plus
-VisDrone; six oblique clips got VisDrone plus COCO, three got COCO plus VisDrone.
+COCO; six oblique clips got VisDrone plus COCO, three got COCO plus VisDrone. Full
+analyses with this Auto: 0455 39 valid vehicles (old Auto 36), 0446 25 (25); 0457 gets
+the same two models as the old Auto (26). The same cars' speeds agree within 0.4%. Filling the
+top-down model in with VisDrone instead cost 0457 nine vehicles: its extra boxes on
+cars under trees broke their tracks.
 Any model can still be chosen on its own on the Process screen.
 
 **VisDrone (trained)** is an optional third detector: `yolo11x` fine-tuned on
@@ -115,6 +120,28 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    calibrated area (plus 5 m) is measured. Far from where the calibration was
    measured it's extrapolated; on a test clip that cost 12 km/h. The rest is drawn
    dashed. Results get a Path column and per-path statistics.
+   **Violations: red lights and solid lines.** Under *Violations*, the **Light** tool
+   marks a traffic light (a circle around its lamps) and **Stop line** draws the line
+   that mustn't be crossed on red. Each red-light setup has any number of lights
+   showing the same signal and any number of stop lines, and a clip can have any
+   number of setups. The light's phase on every frame is read from the colour of
+   the bright, saturated pixels in its circle. Dark frames (LED flicker against the
+   shutter) keep the last state for up to 1 s, and single-frame misreads are voted
+   out. The side panel shows what each light reads on the current frame. When the
+   lamps aren't visible (e.g. filmed from behind or straight down), type the red
+   intervals instead. A vehicle runs the red when the front of its box reaches a
+   stop line, in the counted direction (both, or along/against the arrow), while
+   the phase is red. Options: amber counts as red, and a grace period after the
+   change. **Solid line** draws a road marking: every vehicle crossing it anywhere
+   along it is reported. *Centre crosses* (default) catches lane changes; *Any part
+   over* also catches straddling, with a box at least 0.5 m over for 0.5 s (needs
+   straight-down footage, where the box is the vehicle's footprint). On 0457,
+   normally driven vehicles' boxes reached 0.29 m over the lane line. A crossing
+   only counts once the vehicle is 0.5 m clear on both sides, so tracking wobble
+   along a line isn't reported. These checks use the stored tracks: draw or change
+   them after the analysis and press **Recompute**. Lights added or moved since then
+   are read from the video (decode only, no GPU). A project can have only
+   violation checks, without lines A/B or paths.
 3. **Process:** choose **Camera: Hovering** (stabilize every frame) or **Still**
    (skip stabilization, faster). A preview run with stabilization on measures camera
    drift against the reference frame, in px and in cm on the ground, and says whether
@@ -135,13 +162,20 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    rises or falls by the same share along A→B. Drivers vary but geometry doesn't, so
    a shared trend means a calibration error that biases max speeds. If nothing was
    measured, the page says where tracks were lost. Export CSV, JSON and MP4.
-   **Recompute speeds** re-runs only the speed step, without re-detecting.
+   **Recompute** re-runs the speed and violation steps, without re-detecting.
+   With violation checks, a **Violations** panel shows each light's phase timeline
+   (red/amber/green, with the runs marked) and lists every red-light run and
+   solid-line crossing with its time, vehicle and speed. Click one to watch it. The
+   overlay colours stop lines and lights by the current phase and tags violating
+   vehicles, and `violations.csv` lists them. The vehicle table marks them too.
 5. **Render:** an annotated MP4 for sharing. Vehicles get speed pills (live
    momentary speed between the lines, then max, coloured against the limit). An
    optional side panel (left or right, over the 16:9 frame or beside it) shows:
    a title and subtitle, a speed-limit sign, running totals (vehicles, over the
    limit, top speed, p85), the latest vehicle's speed curve, and the list of
-   vehicles with their max and average speeds, latest or fastest first. A footer is
+   vehicles with their max and average speeds, latest or fastest first. Stop lines
+   and lights are drawn in the phase's colour, and violating vehicles get a red box
+   and a RED LIGHT / SOLID LINE pill. A footer is
    optional. Text uses Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any
    `.ttf` set in `render.font`.
 
@@ -235,4 +269,7 @@ camera sway and per-frame position jitter. It stores the clip as 30 fps
 - A field test with GPS-logged runs, with a ±2% target. The Validation run screen
   is ready for it, but it needs real footage.
 - Height-parallax correction (it is only bounded, when the drone height is known).
+- Reading traffic lights from real footage: none of the test clips shows a lamp
+  facing the camera, so colour reading is only tested on synthetic images and on
+  a typed-phase setup over real tracks.
 - Non-goals for v1: real-time processing, live feed, oblique angles, multi-drone fusion.
