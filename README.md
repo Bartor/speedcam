@@ -46,6 +46,24 @@ twice the GPU time of one model. Measured: on a straight-down clip, COCO finds 1
 detections per frame, top-down 3.4 and Auto 3.6; on an oblique clip, 15.4 / 6.4 /
 16.6. Either model can still be chosen on its own on the Process screen.
 
+**VisDrone (trained)** is an optional third detector: `yolo11x` fine-tuned on
+VisDrone2019-DET (drone footage of city traffic at many heights and angles), with
+`tools/train_visdrone.py`. It took 6.5 h on an RTX 3080 Ti at 1280 px, batch 2, and
+scored car mAP50 0.908 (all 10 VisDrone classes: 0.619). Weights go in
+`~/speedcam-models/yolo11x-visdrone.pt`. Compared with Auto on full analyses of
+three real clips:
+
+| Clip | Valid vehicles, Auto → VisDrone | Same car's speed | Analysis time |
+|---|---|---|---|
+| oblique (0455) | 36 → **39** | ±0.1% | 3.4 → 2.9 min |
+| oblique (0446) | 25 → 25 | ±0.1% | 1.7 → 1.1 min |
+| straight down, trees (0457) | **26** → 18 | ±0.3% | 3.3 → 1.8 min |
+
+The detector doesn't change any vehicle's speed, only which vehicles get measured.
+VisDrone finds more distant cars in oblique views and is faster, since it's a single
+model. Straight down, cars partly under trees drop out longer, and the top-down model
+in Auto holds them better. Pick VisDrone for oblique clips and Auto otherwise.
+
 Boxes and labels in the overlay and the render stay steady through detector gaps
 of up to 1 s: missed frames are interpolated from the detections on either side.
 

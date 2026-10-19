@@ -5,6 +5,7 @@ A simple colour-blob detector is included for synthetic validation clips.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -16,7 +17,7 @@ CLASSES = ["car", "truck", "bus", "motorcycle"]
 # DOTA (OBB models) has no car/truck split: map its vehicle classes onto ours.
 ALIASES = {
     "small vehicle": "car", "large vehicle": "truck", "car": "car", "van": "car", "truck": "truck",
-    "bus": "bus", "motorcycle": "motorcycle", "motorbike": "motorcycle",
+    "bus": "bus", "motorcycle": "motorcycle", "motorbike": "motorcycle", "motor": "motorcycle",
 }
 
 
@@ -84,7 +85,7 @@ class YoloDetector:
         # OpenCV work here (stabilization, colour conversion) single-threaded and ~5x slower.
         cv2.setNumThreads(max(threads, 1))
         self.s = s
-        self.model = YOLO(s.model)
+        self.model = YOLO(resolve_model(s.model))
         self.obb = self.model.task == "obb"
         names = self.model.names
         wanted = set(s.classes)
@@ -171,6 +172,20 @@ class BlobDetector:
 
     def detect_batch(self, frames: list[np.ndarray]) -> list[Detections]:
         return [self(f) for f in frames]
+
+
+# Models trained for speedcam (not on the Ultralytics hub) live here; refer to them by short name.
+MODELS_DIR = Path.home() / "speedcam-models"
+NAMED_MODELS = {"visdrone": "yolo11x-visdrone.pt"}  # yolo11x fine-tuned on VisDrone2019-DET at 1280 px
+
+
+def resolve_model(name: str) -> str:
+    if name in NAMED_MODELS:
+        p = MODELS_DIR / NAMED_MODELS[name]
+        if not p.is_file():
+            raise FileNotFoundError(f"Model '{name}' not found at {p}. It's trained locally (see README).")
+        return str(p)
+    return name
 
 
 def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:

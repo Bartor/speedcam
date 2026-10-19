@@ -141,10 +141,11 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
         <h3>Settings</h3>
         <div className="row wrap small">
           <span className="muted">Model:</span>
-          {["auto", "yolo11x.pt", "yolo11x-obb.pt", "yolo11m.pt"].map((m) => (
+          {["auto", "visdrone", "yolo11x.pt", "yolo11x-obb.pt"].map((m) => (
             <button key={m} className={`chip ${cfg.detection.model === m ? "active" : ""}`}
-              title={m === "auto" ? "COCO + top-down model; works at any camera angle" : undefined}
-              onClick={() => setField(FIELDS[0], m)}>{m === "auto" ? "Auto (any angle)" : m}</button>
+              title={m === "auto" ? "COCO + top-down model; works at any camera angle"
+                : m === "visdrone" ? "yolo11x trained on VisDrone drone footage: best on oblique views (more distant cars, faster); weaker straight down" : undefined}
+              onClick={() => setField(FIELDS[0], m)}>{m === "auto" ? "Auto (any angle)" : m === "visdrone" ? "VisDrone (trained)" : m}</button>
           ))}
         </div>
         <div className="form-grid compact">
