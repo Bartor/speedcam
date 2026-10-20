@@ -208,9 +208,22 @@ class SpeedSettings(BaseModel):
     smooth_poly: int = 2
     arc_dt_s: float = 0.05
     max_accel: float = 8.0
-    # max deviation from a constant-acceleration fit; box-centre wobble on real footage is
-    # ~0.2-0.4 m, an ID switch to another car jumps by a car length
+    # max deviation of the distance travelled from a local constant-acceleration fit over
+    # residual_window_s: an ID switch or a box jump is a step of a metre or more, while real speed
+    # changes are smooth on that scale. (A single fit over the whole stretch rejected stop-and-go
+    # traffic on 0488: 35 of 48 vehicles, residuals of 2-13 m from ordinary speeding up and slowing.)
     max_residual_m: float = 0.5
+    residual_window_s: float = 2.0
+    # the max comes only from frames tracked cleanly (no gap or jump within the speed window);
+    # a vehicle needs at least this much of them in its measured stretch to have a max at all
+    min_clean_s: float = 0.5
+    # drop detections at the start and end of a track whose box is shorter along the direction of
+    # travel than this share of the box just after/before: a vehicle half in the frame (or half
+    # hidden) has a short box whose centre isn't the vehicle's. On 0488 entering boxes grew from
+    # ~3 to 6.7 m over 0.3 s, moving the tracked position ~1 m ahead of the vehicle. In a strongly
+    # oblique view (0447) an approaching car's box grows up to ~30 %/s (~10 % over the 0.25-0.5 s
+    # compared), which this must leave alone
+    trim_truncated_ratio: float = 0.85
     max_disagreement: float = 0.02
     disagreement_invalidates: bool = False
     max_gap_s: float = 0.3

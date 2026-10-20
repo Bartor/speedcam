@@ -11,7 +11,7 @@ export interface OverlayData {
   tracks: Record<string, {
     f0: number; trail: number[]; prov: (number | null)[] | null; cls: string;
     t_first: number | null; t_second: number | null; speed: number | null; speed_max?: number | null;
-    dt: number | null; valid: boolean | null;
+    dt: number | null; valid: boolean | null; avg_valid?: boolean | null;
   }>;
   red_lights?: { name: string; lights: [number, number, number][]; stop_lines: { px: number[]; direction: string }[]; phases: Phase[] }[];
   solid_lines?: { name: string; px: number[] }[];
@@ -134,7 +134,7 @@ export default function TrackOverlay({ data, video, frame, rotation = 0 }: { dat
         if (t >= tr.t_second) {
           const vmax = tr.speed_max ?? tr.speed;
           color = tr.valid ? speedColor(vmax, data.speed_limit_kmh) : "#c800c8";
-          text = `max ${vmax.toFixed(1)} · avg ${tr.speed.toFixed(1)} km/h${tr.valid ? "" : " ?"}`;
+          text = `max ${vmax.toFixed(1)} · avg ${tr.avg_valid === false ? "–" : tr.speed.toFixed(1)} km/h${tr.valid ? "" : " ?"}`;
         } else if (t > tr.t_first) {
           const v = tr.prov?.[frame - tr.f0];
           color = GREY;

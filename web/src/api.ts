@@ -107,6 +107,8 @@ export interface Vehicle {
   frame_entry: number; frame_exit: number; dt_s: number; path_length_m: number; chord_m: number;
   speed_kmh: number; speed_line_kmh: number; disagreement_pct: number; fit_residual_m: number;
   accel_mps2: number; max_gap_s: number; n_points: number; mean_conf: number; valid: boolean; flags: string;
+  /** false: a gap or jump in the stretch makes the average inconclusive (the max still stands) */
+  avg_valid?: boolean; max_clean_pct?: number | null;
   speed_max_kmh: number; speed_min_kmh: number; speed_sigma_kmh: number | null; t_max_s: number | null;
   d_max_m: number | null; speed_trend_pct: number | null;
   profile: { t: number[]; d: number[]; v: number[] } | null;

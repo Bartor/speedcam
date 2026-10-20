@@ -1,7 +1,7 @@
 """Per-track speed estimation from world trajectories.
 
-Primary: arc length of the smoothed trajectory vs. time, linear regression over
-the segment between line A and line B (handles lane changes and curves).
+Primary: arc length of the smoothed trajectory between line A and line B, divided by
+the time between the crossings (handles lane changes and curves).
 Audit: sub-frame line-crossing times, speed = chord between crossings / Δt.
 Momentary: |velocity| from a local quadratic fit over a short window (default 0.5 s),
 giving a speed profile between the lines with its max, min and noise level.
@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
@@ -19,7 +20,10 @@ from .config import SpeedSettings
 from .detection import CLASSES
 from .path import PathGeom
 
-INVALIDATING = {"accel", "residual", "gap", "few_points"}
+# The max speed is what matters most. It comes from the frames tracked cleanly, so a gap or a
+# position jump elsewhere only makes the average over the stretch inconclusive.
+INVALIDATING = {"accel", "few_points", "no_clean"}  # no usable speed at all
+AVG_INCONCLUSIVE = {"residual", "gap"}  # the average is unreliable; the max still stands
 
 
 @dataclass
@@ -91,21 +95,81 @@ def first_crossing(t: np.ndarray, P: np.ndarray, line: np.ndarray, extend: float
     return Crossing(hits[0][0], hits[0][1], len(hits))
 
 
-def slope_se(ts: np.ndarray, res: np.ndarray, corr_s: float) -> float:
-    """Standard error (m/s) of the arc-length regression slope.
+def section_fit(ts: np.ndarray, us: np.ndarray, s: SpeedSettings) -> dict:
+    """Average speed over a measured stretch (distance travelled us, m, at times ts) and its checks.
 
-    `res` are residuals against a constant-acceleration fit: real acceleration doesn't bias the
-    least-squares slope over the section (it equals the mean speed), so it isn't counted as noise.
-    Samples are correlated over about `corr_s` (smoothing, box wobble), so the plain SE is
-    inflated to the number of independent samples in the section.
-    """
-    n = len(ts)
-    sxx = float(((ts - ts.mean()) ** 2).sum())
-    if n < 4 or sxx <= 0:
-        return 0.0
-    se = np.sqrt(float(res @ res) / (n - 3) / sxx)
-    n_eff = max(4.0, (ts[-1] - ts[0]) / max(corr_s, 1e-6))
-    return float(se * np.sqrt(max(1.0, (n - 3) / (n_eff - 3))))
+    The average is distance / time between the ends: that is what average speed means. A
+    regression slope only equals it at constant acceleration; stop-and-go traffic on 0488 read up
+    to 24 % low with it. The residual is the deviation from a local quadratic over
+    `residual_window_s`, which follows real speed changes but not steps (ID switches, box jumps);
+    its rms is the position noise behind the average's standard error."""
+    dt = float(ts[-1] - ts[0])
+    v = float(us[-1] - us[0]) / dt if dt > 0 else 0.0
+    out = {"v": v, "accel": 0.0, "resid_max": 0.0, "rms": 0.0, "se": None}
+    if len(ts) < 4 or dt <= 0:
+        return out
+    out["accel"] = float(2 * np.polyfit(ts, us, 2)[0])  # mean acceleration over the stretch
+    # the filter needs evenly spaced samples (line mode adds the exact crossing times at the ends)
+    step = float(np.median(np.diff(ts)))
+    tg = np.linspace(ts[0], ts[-1], max(4, int(round(dt / step)) + 1))
+    ug = np.interp(tg, ts, us)
+    win = odd_window(int(round(s.residual_window_s / step)), 2, len(ug))
+    e = ug - (savgol_filter(ug, win, 2, mode="interp") if win > 2 else ug)
+    out["resid_max"] = float(np.abs(e).max())
+    out["rms"] = float(np.sqrt(np.mean(e ** 2)))
+    out["se"] = float(np.sqrt(2) * out["rms"] / dt)  # two end positions, each with that noise
+    return out
+
+
+def clean_frames(full: np.ndarray, frames: np.ndarray, dist: np.ndarray, fps: float, s: SpeedSettings) -> np.ndarray:
+    """Per frame of the track: whether its momentary speed rests on clean tracking, i.e. no
+    detection gap longer than max_gap_s and no position jump (deviation from a local constant-
+    acceleration fit over residual_window_s above max_residual_m) within its speed window."""
+    n = len(full)
+    bad = np.zeros(n, bool)
+    det = np.isin(full, frames)
+    edges = np.diff(np.r_[0, (~det).astype(int), 0])
+    for a, b in zip(np.nonzero(edges == 1)[0], np.nonzero(edges == -1)[0]):
+        if (b - a) / fps > s.max_gap_s:
+            bad[a:b] = True
+    win = odd_window(int(round(s.residual_window_s * fps)), 2, n)
+    if win > 2:
+        bad |= np.abs(dist - savgol_filter(dist, win, 2, mode="interp")) > s.max_residual_m
+    h = int(round(s.momentary_window_s / 2 * fps))
+    if h > 0 and bad.any():
+        bad = np.convolve(bad.astype(float), np.ones(2 * h + 1), mode="same") > 0
+    return ~bad
+
+
+def _verdict(flags: list[str], s: SpeedSettings) -> tuple[bool, bool]:
+    """(max speed valid, average valid)."""
+    valid = not (set(flags) & INVALIDATING)
+    avg = AVG_INCONCLUSIVE | ({"disagree"} if s.disagreement_invalidates else set())
+    return valid, valid and not (set(flags) & avg)
+
+
+def trim_truncated(frames: np.ndarray, xy: np.ndarray, corners_w: np.ndarray, fps: float, ratio: float) -> slice:
+    """Detections to keep: drops the first/last ones whose box is shorter along the direction of
+    travel than `ratio` x the box 0.25-0.5 s later/earlier (a vehicle entering or leaving the
+    frame, or coming out from behind something). Comparing with boxes that close in time leaves
+    the slow growth of an approaching vehicle in an oblique view (~10 %/s on 0447) alone."""
+    n = len(frames)
+    a, b = max(1, int(round(0.25 * fps))), max(2, int(round(0.5 * fps)))
+    if n < 2 * b + 3 or ratio <= 0:
+        return slice(0, n)
+    k = max(1, int(round(0.25 * fps)))
+    d = xy[np.minimum(np.arange(n) + k, n - 1)] - xy[np.maximum(np.arange(n) - k, 0)]
+    norm = np.linalg.norm(d, axis=1)
+    d = np.where(norm[:, None] > 0.2, d, xy[-1] - xy[0])  # stopped: use the overall heading
+    d = d / np.maximum(np.linalg.norm(d, axis=1), 1e-9)[:, None]
+    ext = np.ptp(np.einsum("nkj,nj->nk", corners_w, d), axis=1)
+    i0 = 0
+    while i0 < n - b and ext[i0] < ratio * np.median(ext[i0 + a:i0 + b + 1]):
+        i0 += 1
+    i1 = n - 1
+    while i1 > i0 + b and ext[i1] < ratio * np.median(ext[i1 - b:i1 - a + 1]):
+        i1 -= 1
+    return slice(i0, i1 + 1)
 
 
 def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
@@ -162,21 +226,10 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
     flags: list[str] = []
     v_line = float(np.linalg.norm(second.point - first.point) / dt)
     path_len = float(ss[-1] - ss[0])
-    if len(ts) >= 3:
-        v_arc, _ = np.polyfit(ts, ss, 1)
-    else:
-        v_arc = path_len / dt
+    if len(ts) < 3:
         flags.append("few_points")
-    # residuals against a constant-acceleration fit: track jitter, not real speed change
-    accel, quad_max, rms, avg_se = 0.0, 0.0, 0.0, None
-    if len(ts) >= 4:
-        q = np.polyfit(ts, ss, 2)
-        accel = float(2 * q[0])
-        quad_res = ss - np.polyval(q, ts)
-        quad_max = float(np.abs(quad_res).max())
-        rms = float(np.sqrt(np.mean(quad_res ** 2)))
-        avg_se = slope_se(ts, quad_res, max(s.smooth_window_s, s.momentary_window_s))
-    v_arc = float(v_arc)
+    fit = section_fit(ts, ss, s)
+    v_arc, accel, quad_max, rms, avg_se = fit["v"], fit["accel"], fit["resid_max"], fit["rms"], fit["se"]
     disagreement = (v_arc - v_line) / v_line if v_line > 0 else np.inf
 
     if abs(accel) > s.max_accel:
@@ -189,8 +242,8 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         flags.append("disagree")
     if ca.count > 1 or cb.count > 1:
         flags.append("multi_cross")
-    invalid = INVALIDATING | ({"disagree"} if s.disagreement_invalidates else set())
-    valid = not (set(flags) & invalid)
+    dist_all = np.interp(t, td, sd)
+    clean = clean_frames(full, frames, dist_all, fps, s)
 
     result = {
         "track_id": int(track_id),
@@ -212,13 +265,16 @@ def analyze_track(track_id: int, frames: np.ndarray, xy: np.ndarray, fps: float,
         "max_gap_s": max_gap_s,
         "n_points": int(len(frames)),
         "mean_conf": float(mean_conf),
-        "valid": bool(valid),
-        "flags": ";".join(flags),
     }
 
     inst_ref = momentary_speed(P_raw, fps, max(2.0, 4 * s.momentary_window_s))
-    dist = np.interp(t, td, sd) - np.interp(t_in, td, sd)
-    result.update(_profile(t, inst, inst_ref, dist, t_in, t_out, v_arc * 3.6, direction))
+    dist = dist_all - np.interp(t_in, td, sd)
+    result.update(_profile(t, inst, inst_ref, dist, t_in, t_out, v_arc * 3.6, direction, s.momentary_window_s / 2,
+                           clean, s.min_clean_s))
+    if result.pop("_no_clean"):
+        flags.append("no_clean")
+    result["valid"], result["avg_valid"] = _verdict(flags, s)
+    result["flags"] = ";".join(flags)
     render.t_first, render.t_second, render.result = t_in, t_out, result
     return render
 
@@ -265,21 +321,13 @@ def _analyze_path(track_id, frames, full, t, P_raw, P, max_gap_s, fps, path: Pat
     dt = t_out - t_in
     ts, us = t[i0:i1 + 1], u_sm[i0:i1 + 1]
 
-    v_path, _ = np.polyfit(ts, us, 1)
-    accel, quad_max, rms, avg_se = 0.0, 0.0, 0.0, None
-    if len(ts) >= 4:
-        q = np.polyfit(ts, us, 2)
-        accel = float(2 * q[0])
-        quad_res = us - np.polyval(q, ts)
-        quad_max = float(np.abs(quad_res).max())
-        rms = float(np.sqrt(np.mean(quad_res ** 2)))
-        avg_se = slope_se(ts, quad_res, max(s.smooth_window_s, s.momentary_window_s))
+    fit = section_fit(ts, us, s)
+    v_path, accel, quad_max, rms, avg_se = fit["v"], fit["accel"], fit["resid_max"], fit["rms"], fit["se"]
     # audit: the vehicle's own trajectory length over the same time (lane changes make it longer)
     k = max(1, int(round(s.arc_dt_s * fps)))
     idx = np.unique(np.r_[np.arange(i0, i1 + 1, k), i1])
     arc = float(np.linalg.norm(np.diff(P[idx], axis=0), axis=1).sum())
     v_arc = arc / dt
-    v_path = float(v_path)
     disagreement = (v_path - v_arc) / v_arc if v_arc > 0 else np.inf
 
     flags: list[str] = []
@@ -291,7 +339,6 @@ def _analyze_path(track_id, frames, full, t, P_raw, P, max_gap_s, fps, path: Pat
         flags.append("gap")
     if abs(disagreement) > s.max_disagreement:
         flags.append("disagree")
-    invalid = INVALIDATING | ({"disagree"} if s.disagreement_invalidates else set())
     path_len = float(us[-1] - us[0])
     result = {
         "track_id": int(track_id), "class": cls, "direction": direction,
@@ -304,34 +351,54 @@ def _analyze_path(track_id, frames, full, t, P_raw, P, max_gap_s, fps, path: Pat
         "disagreement_pct": float(disagreement * 100),
         "fit_residual_m": rms, "accel_mps2": accel, "max_gap_s": max_gap_s,
         "n_points": int(len(frames)), "mean_conf": float(mean_conf),
-        "valid": not (set(flags) & invalid), "flags": ";".join(flags),
         "s_entry_m": float(s_sm[i0]), "s_exit_m": float(s_sm[i1]),
         "coverage_pct": float(100 * cover / max(path.hi - path.lo, 1e-9)),
         "path": path.name,
     }
     inst = _deriv_kmh(u_raw, fps, s.momentary_window_s)
     inst_ref = _deriv_kmh(u_raw, fps, max(2.0, 4 * s.momentary_window_s))
-    result.update(_profile(t, inst, inst_ref, u_sm - u_sm[i0], t_in, t_out, v_path * 3.6, direction))
+    clean = clean_frames(full, frames, u_sm, fps, s)
+    result.update(_profile(t, inst, inst_ref, u_sm - u_sm[i0], t_in, t_out, v_path * 3.6, direction,
+                           s.momentary_window_s / 2, clean, s.min_clean_s))
+    if result.pop("_no_clean"):
+        flags.append("no_clean")
+    result["valid"], result["avg_valid"] = _verdict(flags, s)
+    result["flags"] = ";".join(flags)
     render.inst_kmh = inst
     render.t_first, render.t_second, render.result = t_in, t_out, result
     return render
 
 
-def _profile(t, inst, inst_ref, dist, t_in, t_out, avg_kmh: float, direction: str) -> dict:
+def _profile(t, inst, inst_ref, dist, t_in, t_out, avg_kmh: float, direction: str, half_window_s: float,
+             clean: Optional[np.ndarray] = None, min_clean_s: float = 0.0) -> dict:
     """Momentary speed over the measured stretch: max/min, where the max happened, noise and a
     compact profile. `inst_ref` is the same curve over a much longer window, `dist` the distance
-    travelled since the start of the stretch, all per frame."""
+    travelled since the start of the stretch, all per frame of the track (`t`). Max and min only
+    come from frames whose speed window (± `half_window_s`) lies inside the track: at its very ends
+    the speed is extrapolated (on 0474 the first frame after a vehicle entered read 47 km/h, the
+    rest of it 31-44), and only from `clean` frames (see clean_frames); fewer than `min_clean_s`
+    of them sets "_no_clean"."""
     seg = (t >= t_in) & (t <= t_out)
     if seg.sum() < 3:
         return {"speed_max_kmh": avg_kmh, "speed_min_kmh": avg_kmh, "speed_sigma_kmh": None, "t_max_s": None,
-                "d_max_m": None, "speed_trend_pct": None, "profile": None}
+                "d_max_m": None, "speed_trend_pct": None, "profile": None, "max_clean_pct": None,
+                "_no_clean": False}
     v = inst[seg]
     ts = t[seg]
     d = dist[seg]
     # noise: deviation from a much smoother version of the same curve (real speed changes are slow)
     ref = inst_ref[seg]
     sigma = float(np.std(v - ref))
-    k = int(np.argmax(v))
+    inner = (ts >= t[0] + half_window_s) & (ts <= t[-1] - half_window_s)
+    if inner.sum() < 3:
+        inner = np.ones(len(v), bool)
+    ok = clean[seg] if clean is not None else np.ones(len(v), bool)
+    fps = (len(t) - 1) / max(t[-1] - t[0], 1e-9)
+    no_clean = (inner & ok).sum() < max(3, min_clean_s * fps)
+    if not no_clean:
+        inner &= ok
+    vi = np.where(inner, v, np.nan)
+    k = int(np.nanargmax(vi))
     # speed change from the first to the second half of the stretch, as a share of the average,
     # signed towards line B: shared by all vehicles it points at calibration, not driving
     half = d <= d[-1] / 2
@@ -340,12 +407,14 @@ def _profile(t, inst, inst_ref, dist, t_in, t_out, avg_kmh: float, direction: st
         trend = -trend
     step = max(1, int(np.ceil(len(v) / 120)))
     return {
-        "speed_max_kmh": float(v.max()),
-        "speed_min_kmh": float(v.min()),
+        "speed_max_kmh": float(vi[k]),
+        "speed_min_kmh": float(np.nanmin(vi)),
         "speed_sigma_kmh": sigma,
         "t_max_s": float(ts[k]),
         "d_max_m": float(d[k]),
         "speed_trend_pct": None if trend is None else float(trend),
+        "max_clean_pct": float(100 * ok.mean()),
+        "_no_clean": bool(no_clean),
         "profile": {"t": np.round(ts[::step] - t_in, 3).tolist(), "d": np.round(d[::step], 2).tolist(),
                     "v": np.round(v[::step], 2).tolist()},
     }
@@ -378,14 +447,23 @@ def calibration_check(results: list[dict], min_vehicles: int = 5) -> dict:
 
 
 def compute_speeds(tracks: pd.DataFrame, fps: float, line_a: Optional[np.ndarray], line_b: Optional[np.ndarray],
-                   s: SpeedSettings, paths: Optional[list[PathGeom]] = None) -> tuple[list[dict], dict[int, TrackRender]]:
+                   s: SpeedSettings, paths: Optional[list[PathGeom]] = None,
+                   H: Optional[np.ndarray] = None) -> tuple[list[dict], dict[int, TrackRender]]:
     """`tracks` needs columns frame, track_id, x_m, y_m, cls, conf. With `paths`, each vehicle is
-    measured along the path it covers most and lines A/B are ignored."""
+    measured along the path it covers most and lines A/B are ignored. With `H` (reference px ->
+    ground m) and box corners (c0x..c3y), truncated boxes at the ends of tracks are dropped."""
     results: list[dict] = []
     renders: dict[int, TrackRender] = {}
     df = tracks[tracks["track_id"] >= 0]
+    cols = [f"c{k}{a}" for k in range(4) for a in "xy"]
+    trim = H is not None and all(c in df for c in cols)
     for tid, g in df.groupby("track_id"):
         cls = CLASSES[int(g["cls"].mode().iloc[0])]
+        if trim:
+            g = g.sort_values("frame")
+            cw = cv2.perspectiveTransform(g[cols].to_numpy(float).reshape(-1, 1, 2), H).reshape(-1, 4, 2)
+            g = g.iloc[trim_truncated(g["frame"].to_numpy(), g[["x_m", "y_m"]].to_numpy(float), cw, fps,
+                                      s.trim_truncated_ratio)]
         r = analyze_track(int(tid), g["frame"].to_numpy(), g[["x_m", "y_m"]].to_numpy(float), fps,
                           None if line_a is None else np.asarray(line_a, float),
                           None if line_b is None else np.asarray(line_b, float), s, cls,

@@ -392,3 +392,67 @@ def test_rotation_matrix_matches_rotate_frame(deg):
     for k, (x, y) in enumerate(np.round(moved).astype(int)):
         assert rot[y, x] == 10 + k
     assert rot.shape == ((60, 40) if deg in (90, 270) else (40, 60))
+
+
+def _stop_and_go(fps=60.0, jump_m=0.0):
+    """Speed swinging 5-25 km/h over 20 s (queueing traffic) along x, tiny noise."""
+    t = np.arange(0, 20, 1 / fps)
+    v = (15 + 10 * np.sin(2 * np.pi * t / 8)) / 3.6
+    x = np.concatenate([[0], np.cumsum((v[1:] + v[:-1]) / 2 / fps)]) - 5
+    x = x + np.where(t > 6, jump_m, 0.0)  # an ID switch / box jump, between the lines
+    rng = np.random.default_rng(1)
+    return np.arange(len(t)), np.column_stack([x, rng.normal(0, 0.02, len(t))]), t, x
+
+
+def test_stop_and_go_average_is_distance_over_time():
+    fps = 60.0
+    frames, xy, t, x = _stop_and_go(fps)
+    r = analyze_track(1, frames, xy, fps, *LINES, SpeedSettings()).result
+    assert r["valid"], r["flags"]
+    # true average between the line crossings (x = 10 and x = 30)
+    t_a, t_b = np.interp(10, x, t), np.interp(30, x, t)
+    true = 20 / (t_b - t_a) * 3.6
+    assert r["speed_kmh"] == pytest.approx(true, rel=0.005)
+
+
+def test_position_jump_makes_average_inconclusive_but_keeps_max():
+    fps = 60.0
+    frames, xy, _, _ = _stop_and_go(fps)
+    clean = analyze_track(1, frames, xy, fps, *LINES, SpeedSettings()).result
+    frames, xy, _, _ = _stop_and_go(fps, jump_m=3.0)
+    r = analyze_track(1, frames, xy, fps, *LINES, SpeedSettings()).result
+    assert "residual" in r["flags"]
+    assert r["valid"] and not r["avg_valid"]  # the max still counts, the average doesn't
+    # a 3 m jump inside a 0.5 s speed window would read ~20 km/h fast; those frames are skipped
+    assert r["speed_max_kmh"] == pytest.approx(clean["speed_max_kmh"], abs=0.5)
+    assert r["speed_max_kmh"] < 26
+
+
+def test_long_detection_gap_keeps_max_from_tracked_frames():
+    fps = 60.0
+    frames, xy, t, x = _stop_and_go(fps)
+    keep = ~((t > 5) & (t < 6))  # detector misses the vehicle for 1 s between the lines
+    r = analyze_track(1, frames[keep], xy[keep], fps, *LINES, SpeedSettings()).result
+    assert "gap" in r["flags"] and r["valid"] and not r["avg_valid"]
+    assert r["speed_max_kmh"] < 26 and r["max_clean_pct"] < 100
+
+
+def test_truncated_entry_boxes_are_trimmed():
+    from speedcam.speed import trim_truncated
+
+    fps, v = 60.0, 50 / 3.6
+    t = np.arange(0, 4, 1 / fps)
+    front = -10 + v * t
+
+    def boxes(length):
+        c = front - length / 2  # an entering vehicle's box centre lags behind the vehicle
+        xy = np.column_stack([c, np.zeros_like(c)])
+        corners = np.stack([np.column_stack([c - length / 2, -np.ones_like(c)]), np.column_stack([c + length / 2, -np.ones_like(c)]),
+                            np.column_stack([c + length / 2, np.ones_like(c)]), np.column_stack([c - length / 2, np.ones_like(c)])], 1)
+        return trim_truncated(np.arange(len(t)), xy, corners, fps, 0.85)
+
+    entering = boxes(np.minimum(4.5, 1.0 + 3.5 * t / 0.3))  # 1 -> 4.5 m in 0.3 s (0488: 3 -> 6.7 m)
+    assert 0.1 * fps < entering.start <= 0.3 * fps and entering.stop == len(t)
+    assert boxes(np.full_like(t, 4.5)) == slice(0, len(t))
+    approaching = boxes(2.2 * 1.3 ** t)  # oblique view, box growing 30 %/s (0447): kept
+    assert approaching.start <= 1 and approaching.stop == len(t)

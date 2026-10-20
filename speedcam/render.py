@@ -308,7 +308,7 @@ class Panel:
             unit_w = f("bold", int(14 * k)).getlength("km/h") + int(6 * k)
             d.text((rx - unit_w, y + int(2 * k)), f"{v['speed_max_kmh']:.1f}", font=f("num", int(32 * k)),
                    fill=col, anchor="rt")
-            sub = f"avg {v['speed_kmh']:.1f}"
+            sub = f"avg {v['speed_kmh']:.1f}" if v.get("avg_valid", True) else "avg –"
             if rs.show_margin and v.get("speed_max_u_kmh") is not None:
                 sub = f"{margin_text(v, 'max')}  ·  {sub}"
             d.text((rx, y + row_h - int(14 * k)), sub, font=f("regular", int(15 * k)), fill=MUTED, anchor="rb")
@@ -596,7 +596,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
-                                           paths=cal.path_geoms)
+                                           paths=cal.path_geoms, H=cal.H)
     if rs.panel != "none" and rs.show_margin:
         margin_of_error(cfg, results, renders, cal, fps)
     viol = find_violations(cfg, cal, tracks, renders, fps, out, reporter)
@@ -679,7 +679,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
     _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
-                                           paths=cal.path_geoms)
+                                           paths=cal.path_geoms, H=cal.H)
     viol = find_violations(cfg, cal, tracks, renders, fps, out, sample=False) or {}
     tf = np.load(out / "transforms.npz")
     T_inv = np.linalg.inv(tf["T"]) if len(tf["T"]) else np.zeros((0, 3, 3))
@@ -703,6 +703,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
             "speed_max": res.get("speed_max_kmh") if res else None,
             "dt": res["dt_s"] if res else None,
             "valid": res["valid"] if res else None,
+            "avg_valid": res.get("avg_valid", True) if res else None,
         }
     return {
         "width": info.width, "height": info.height, "capture_fps": fps, "container_fps": info.container_fps,

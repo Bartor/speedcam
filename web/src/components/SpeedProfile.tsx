@@ -57,10 +57,17 @@ export default function SpeedProfile({ v, limit, tNow }: Props) {
           <span className={`sprof-kpi-val ${above ? "bad-text" : ""}`}>{fmt(v.speed_max_kmh)}</span>
           <span className="sprof-kpi-unit">km/h {margin(v, "max") ?? (sig ? `±${(2 * sig).toFixed(1)} noise` : "")}</span>
         </div>
-        <div className="sprof-kpi" title={marginBreakdown(v, "avg")}>
-          <span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">{fmt(v.speed_kmh)}</span>
-          <span className="sprof-kpi-unit">km/h {margin(v, "avg") ?? ""}</span>
-        </div>
+        {v.avg_valid === false ? (
+          <div className="sprof-kpi" title={`A detection gap or position jump in the stretch (${v.flags}) makes the average inconclusive. The max only uses cleanly tracked frames.`}>
+            <span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">–</span>
+            <span className="sprof-kpi-unit">inconclusive</span>
+          </div>
+        ) : (
+          <div className="sprof-kpi" title={marginBreakdown(v, "avg")}>
+            <span className="sprof-kpi-label">Average A→B</span><span className="sprof-kpi-val">{fmt(v.speed_kmh)}</span>
+            <span className="sprof-kpi-unit">km/h {margin(v, "avg") ?? ""}</span>
+          </div>
+        )}
         <div className="sprof-kpi"><span className="sprof-kpi-label">Min</span><span className="sprof-kpi-val">{fmt(v.speed_min_kmh)}</span><span className="sprof-kpi-unit">km/h</span></div>
         <div className="sprof-kpi"><span className="sprof-kpi-label">Max at</span><span className="sprof-kpi-val">{fmt(v.d_max_m)}</span><span className="sprof-kpi-unit">m after the first line</span></div>
       </div>
@@ -77,8 +84,10 @@ export default function SpeedProfile({ v, limit, tNow }: Props) {
           {band && <path d={band} className="band" />}
           <line x1={m.l} x2={W - m.r} y1={y(limit)} y2={y(limit)} className="limit" />
           <text x={W - m.r} y={y(limit) - 5} className="ref-label limit-label" textAnchor="end">limit {limit}</text>
-          <line x1={m.l} x2={W - m.r} y1={y(v.speed_kmh)} y2={y(v.speed_kmh)} className="avg" />
-          <text x={m.l + 4} y={y(v.speed_kmh) - 5} className="ref-label">avg {fmt(v.speed_kmh)}</text>
+          {v.avg_valid !== false && <>
+            <line x1={m.l} x2={W - m.r} y1={y(v.speed_kmh)} y2={y(v.speed_kmh)} className="avg" />
+            <text x={m.l + 4} y={y(v.speed_kmh) - 5} className="ref-label">avg {fmt(v.speed_kmh)}</text>
+          </>}
           <path d={line} className="series" />
           <circle cx={x(p.d[iMin])} cy={y(p.v[iMin])} r={4} className="mark min" />
           <circle cx={x(p.d[iMax])} cy={y(p.v[iMax])} r={5.5} className={`mark max ${above ? "over" : ""}`} />

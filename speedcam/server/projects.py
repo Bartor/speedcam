@@ -27,7 +27,7 @@ OUTPUT_FILES = {"proxy.mp4", "render.mp4", "results.csv", "results.json", "track
                 "stabilization.csv", "render.json", "validation.json", "violations.csv"}
 SCREENS = {"import", "calibrate", "process", "results"}
 FRAME_CACHE_MAX = 400  # decoded full-res frames kept on disk per project
-OVERLAY_VERSION = 5  # bump when overlay_data() output changes, so cached copies are rebuilt
+OVERLAY_VERSION = 6  # bump when overlay_data() output changes, so cached copies are rebuilt
 
 
 class ProjectStore:

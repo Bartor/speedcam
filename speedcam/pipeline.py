@@ -349,7 +349,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 
     reporter.progress("computing speeds", 0, 1)
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
-                                           paths=cal.path_geoms)
+                                           paths=cal.path_geoms, H=cal.H)
     budget = margin_of_error(cfg, results, renders, cal, fps)
     viol = find_violations(cfg, cal, df, renders, fps, out, reporter)
     n_fail = sum(1 for r in stab_rows if not r[1])
@@ -395,7 +395,8 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
             "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
             "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct",
             "t_max_s", "d_max_m", "speed_trend_pct", "speed_line_kmh", "disagreement_pct",
-            "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "flags", "violations"]
+            "fit_residual_m", "accel_mps2", "max_gap_s", "n_points", "mean_conf", "valid", "avg_valid",
+            "max_clean_pct", "flags", "violations"]
     # each measured vehicle lists its violations, e.g. "red light (Main St)"
     tags: dict[int, list[str]] = {}
     for e in (viol or {}).get("red_light", []):
@@ -413,6 +414,8 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
     table["violations"] = table["violations"].map(lambda v: "; ".join(v) if isinstance(v, list) else "")
     table.to_csv(out / "results.csv", index=False, float_format="%.4f")
     valid = [r for r in results if r["valid"]]
+    # averages only from vehicles whose average is conclusive (no gap or jump in the stretch)
+    avg_ok = [r for r in valid if r.get("avg_valid", True)]
     summary = {
         "source": cfg.source,
         "capture_fps": fps,
@@ -421,10 +424,10 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
         "calibration": cal.summary(),
         "timing_warnings": timing_msgs,
         "run": run,
-        "stats": summarize([r["speed_kmh"] for r in valid], cfg.stats, n_total=len(results)),
+        "stats": summarize([r["speed_kmh"] for r in avg_ok], cfg.stats, n_total=len(results)),
         "stats_max": summarize([r["speed_max_kmh"] for r in valid], cfg.stats, n_total=len(results)),
         "by_direction": {
-            d: summarize([r["speed_kmh"] for r in valid if r["direction"] == d], cfg.stats)
+            d: summarize([r["speed_kmh"] for r in avg_ok if r["direction"] == d], cfg.stats)
             for d in ("A->B", "B->A")
         },
         "by_direction_max": {
@@ -434,7 +437,7 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
         # one set of statistics per path of motion (e.g. per road of an intersection)
         "by_path": {
             name: {
-                "avg": summarize([r["speed_kmh"] for r in valid if r.get("path") == name], cfg.stats,
+                "avg": summarize([r["speed_kmh"] for r in avg_ok if r.get("path") == name], cfg.stats,
                                  n_total=sum(r.get("path") == name for r in results)),
                 "max": summarize([r["speed_max_kmh"] for r in valid if r.get("path") == name], cfg.stats,
                                  n_total=sum(r.get("path") == name for r in results)),
@@ -460,7 +463,7 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     world = calibration.apply_h(cal.H, reference_positions(df))
     df["x_m"], df["y_m"] = world[:, 0], world[:, 1]
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
-                                           paths=cal.path_geoms)
+                                           paths=cal.path_geoms, H=cal.H)
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}
     run = {**prev.get("run", {}), **track_diagnostics(df, renders)}
     budget = margin_of_error(cfg, results, renders, cal, fps)

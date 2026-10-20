@@ -59,9 +59,12 @@ def evaluate(refs: list[Reference], vehicles: list[dict]) -> dict:
         ukey = "speed_max" if ref.metric == "max" else "speed_avg"
         u, u_lo = v.get(f"{ukey}_u_kmh"), v.get(f"{ukey}_u_lower_kmh")
         err = measured - ref.speed_kmh
-        row.update(measured_kmh=measured, error_kmh=err, error_pct=100 * err / ref.speed_kmh, valid=v["valid"])
-        if not v["valid"]:
-            row["note"] = (row["note"] + "; " if row["note"] else "") + f"vehicle flagged invalid ({v['flags']})"
+        # an average reference needs a conclusive average; a max reference only the max
+        ok = v["valid"] and (ref.metric == "max" or v.get("avg_valid", True))
+        row.update(measured_kmh=measured, error_kmh=err, error_pct=100 * err / ref.speed_kmh, valid=ok)
+        if not ok:
+            what = "vehicle flagged invalid" if not v["valid"] else "average inconclusive"
+            row["note"] = (row["note"] + "; " if row["note"] else "") + f"{what} ({v['flags']})"
         if u is not None:
             # combined with the reference's own uncertainty; the upper bound of the error also
             # allows the one-sided parallax bias (measured speeds can only be too high from it)

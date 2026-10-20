@@ -96,7 +96,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
       ? (useMax ? res.by_path[road].max : res.by_path[road].avg)
       : useMax ? (dir === "all" ? res.stats_max : res.by_direction_max?.[dir]) : (dir === "all" ? res.stats : res.by_direction[dir]))
     : undefined;
-  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (road !== "all" ? v.path === road : dir === "all" || v.direction === dir))
+  const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (useMax || v.avg_valid !== false) && (road !== "all" ? v.path === road : dir === "all" || v.direction === dir))
     .map((v) => (useMax ? v.speed_max_kmh : v.speed_kmh)) : [];
   // profile shown: the clicked vehicle, else the fastest valid one
   const fastest = res?.vehicles.filter((v) => v.valid).sort((a, b) => b.speed_max_kmh - a.speed_max_kmh)[0];
@@ -203,7 +203,9 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                       {cols.map((c) => {
                         const x = v[c.key];
                         const mk = c.key === "speed_max_kmh" ? "max" : c.key === "speed_kmh" ? "avg" : null;
-                        const pm = mk && margin(v, mk);
+                        const inconclusive = c.key === "speed_kmh" && v.avg_valid === false;
+                        const pm = mk && !inconclusive && margin(v, mk);
+                        if (inconclusive) return <td key={c.key} className="num muted" title={`Average inconclusive (${v.flags}): a detection gap or position jump in the stretch. The max only uses cleanly tracked frames.`}>–</td>;
                         return <td key={c.key} title={mk ? marginBreakdown(v, mk) : undefined}
                           className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
                           {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
@@ -211,7 +213,8 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                         </td>;
                       })}
                       <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
-                        {v.valid && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}
+                        {v.valid && v.avg_valid === false && <span className="status warn" title={`${v.flags}: the average over the stretch is inconclusive; the max comes from the ${Math.round(v.max_clean_pct ?? 0)} % of it tracked cleanly`}>avg inconclusive</span>}
+                        {v.valid && v.avg_valid !== false && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}
                         {v.violations?.map((x) => <span key={x} className="status bad" title="Violation (see Violations above)">⛔ {x}</span>)}</td>
                     </tr>
                   );
@@ -264,7 +267,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           </div>
           <p className="footnote">{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
           <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
-          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines." : "Per vehicle: average speed from line A to line B."}</p>
+          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines, from cleanly tracked frames." : "Per vehicle: average speed from line A to line B, only where it's conclusive (no detection gap or jump)."}</p>
         </section>
 
         <MarginPanel project={project} res={res} onProject={onChanged}
