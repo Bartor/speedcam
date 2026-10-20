@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import threading
@@ -125,7 +126,8 @@ class ProjectStore:
         if st["results_json"]:
             try:
                 r = json.loads((d / "results.json").read_text(encoding="utf-8"))
-                s = r.get("stats", {})
+                # headline numbers are of max speeds (what matters most), valid = max valid
+                s = r.get("stats_max") or r.get("stats", {})
                 row.update(n_vehicles=s.get("n_total"), n_valid=s.get("n_valid"), mean_kmh=s.get("mean"),
                            p85_kmh=s.get("p85"), analyzed=(d / "results.json").stat().st_mtime)
             except (OSError, ValueError):
@@ -152,6 +154,18 @@ class ProjectStore:
                 continue
         for pid in self.db.project_ids() - on_disk:
             self.db.delete_project(pid)
+
+    @staticmethod
+    def source_key(path: str | Path) -> str:
+        """Identifies a video file whatever the spelling of its path (case, slashes, ..)."""
+        return os.path.normcase(str(Path(path).expanduser().resolve()))
+
+    def by_source(self) -> dict[str, list[dict]]:
+        """Projects per video file (most recently opened first)."""
+        out: dict[str, list[dict]] = {}
+        for r in self.db.projects():
+            out.setdefault(self.source_key(r["source"]), []).append({"id": r["id"], "name": r["name"]})
+        return out
 
     def list(self) -> list[dict]:
         rows = self.db.projects()
@@ -238,11 +252,16 @@ class ProjectStore:
             p.unlink(missing_ok=True)
 
     def thumbnail(self, pid: str) -> Path:
-        f = self.cache_dir(pid) / "thumb.jpg"
+        cfg = self.config(pid)
+        f = self.cache_dir(pid) / (f"thumb_{cfg.rotation}.jpg" if cfg.rotation else "thumb.jpg")  # as viewed
         if not f.exists():
-            ref = self.config(pid).calibration.reference_frame
-            src = self.frame_file(pid, ref, "jpg", 480)
-            shutil.copyfile(src, f)
+            src = self.frame_file(pid, cfg.calibration.reference_frame, "jpg", 480)
+            if cfg.rotation:
+                from ..video import rotate_frame
+
+                cv2.imwrite(str(f), rotate_frame(cv2.imread(str(src)), cfg.rotation), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            else:
+                shutil.copyfile(src, f)
         return f
 
     def overlay(self, pid: str) -> dict:

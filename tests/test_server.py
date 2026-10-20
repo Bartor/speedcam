@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -26,6 +27,15 @@ def test_full_api_flow(tmp_path):
     pid = p["id"]
     assert p["info"]["nb_frames"] > 0
     assert _wait(client, p["proxy_job"])["status"] == "done"
+
+    # one project per video: the same file (any spelling of its path) opens the existing project
+    import os
+    again = client.post("/api/projects", json={"source": os.path.normcase(cfg.source).upper()}).json()
+    assert again["id"] == pid and again["existing"]
+    assert len(client.get("/api/projects").json()) == 1
+    listing = client.get("/api/fs", params={"path": str(tmp_path)}).json()
+    entry = next(e for e in listing["entries"] if e["name"] == "syn.mp4")
+    assert entry["projects"] == [{"id": pid, "name": p["name"]}]
 
     r = client.get(f"/api/projects/{pid}/proxy.mp4", headers={"Range": "bytes=0-99"})
     assert r.status_code == 206 and len(r.content) == 100
@@ -78,6 +88,34 @@ def test_full_api_flow(tmp_path):
     assert client.get(f"/api/projects/{pid}/results").json()["render"]["output_fps"] == 30
     assert client.get(f"/api/projects/{pid}/files/results.csv").status_code == 200
     assert client.get(f"/api/projects/{pid}/files/../project.json").status_code == 404
+
+    # jobs history: every job newest first, finished ones with their own copies of their outputs
+    rc = client.post(f"/api/projects/{pid}/recompute")
+    assert rc.status_code == 200
+    for _ in range(20):  # copies are made just after a job reports done
+        hist = client.get("/api/jobs/history").json()
+        by_kind = {}
+        for r in hist["jobs"]:
+            by_kind.setdefault(r["kind"], r)
+        if all(by_kind.get(k, {}).get("files") for k in ("analyze", "render", "recompute")):
+            break
+        time.sleep(0.3)
+    created = [r["created"] for r in hist["jobs"]]
+    assert created == sorted(created, reverse=True)
+    assert {"proxy", "analyze", "preview", "render", "recompute"} <= set(by_kind)
+    names = {k: {f["name"] for f in r["files"]} for k, r in by_kind.items()}
+    assert {"results.json", "results.csv", "tracks.parquet", "settings.json"} <= names["analyze"]
+    assert {"render.mp4", "render.json"} <= names["render"] and names["preview"] == set()
+    assert by_kind["recompute"]["status"] == "done" and by_kind["recompute"]["result"]["n_valid"] == 1
+    assert hist["artifacts_bytes"] > 0 and by_kind["analyze"]["project_name"]
+    aj = by_kind["analyze"]["id"]
+    f = client.get(f"/api/jobs/{aj}/files/results.json")
+    assert f.status_code == 200 and json.loads(f.content)["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)
+    assert "analyze" in f.headers["content-disposition"]
+    assert client.get(f"/api/jobs/{aj}/files/..%2Fproject.json").status_code == 404
+    assert client.delete(f"/api/jobs/{aj}/files").status_code == 200
+    assert client.get(f"/api/jobs/{aj}/files/results.json").status_code == 404
+    assert next(r for r in client.get("/api/jobs/history").json()["jobs"] if r["id"] == aj)["files"] == []
 
 
 @pytest.mark.slow

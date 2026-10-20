@@ -59,3 +59,21 @@
 .phase-seg { position: absolute; top: 0; bottom: 0; }
 .phase-event { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #ff285a; }
 .phase-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .9; pointer-events: none; }
+
+/* jobs page */
+.jobs-link { color: var(--text-2); font-size: var(--fs-sm); padding: 4px 10px; border-radius: var(--r-md); text-decoration: none; margin-left: auto; }
+.jobs-link:hover, .jobs-link.active { color: var(--text); background: var(--surface-2); }
+.jobs-page .panel { max-width: 1400px; margin: 0 auto; }
+.jobs-day { margin: 18px 0 6px; font-size: var(--fs-sm); color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+.job-row { display: grid; grid-template-columns: 52px 92px minmax(140px, 1.2fr) 120px 84px minmax(120px, 1.4fr) minmax(200px, 2.4fr); gap: 10px; align-items: center; padding: 7px 8px; border-bottom: 1px solid var(--grid); font-size: var(--fs-sm); }
+.job-row:hover { background: var(--surface-2); }
+.job-time { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.job-kind { font-weight: 600; }
+.job-project { color: var(--text); text-decoration: none; }
+.job-project[href]:hover { color: var(--accent-hover); text-decoration: underline; }
+.job-status.done { color: #2ecc71; } .job-status.error { color: #eb4034; } .job-status.running { color: var(--accent-hover); }
+.job-status.cancelled, .job-status.interrupted, .job-status.queued { color: var(--text-2); }
+.job-files { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.file-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); text-decoration: none; font-size: 12px; background: var(--inset); }
+.file-chip:hover { border-color: var(--accent); }
+@media (max-width: 900px) { .job-row { grid-template-columns: 52px 1fr; } .job-row > * { grid-column: 2; } .job-row > .job-time { grid-column: 1; grid-row: 1 / span 6; } }

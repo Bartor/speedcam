@@ -30,6 +30,9 @@ function Picker({ onProject }: { onProject: (p: Project) => void }) {
   const browse = (p?: string) => api.fs(p).then(setDir).catch((e) => setErr(String(e)));
   useEffect(() => { browse(localStorage.getItem("speedcam.lastDir") ?? undefined); }, []);
 
+  // a video that already has a project opens that project (one project per video)
+  const selected = dir?.entries.find((e) => e.path === path);
+  const owner = selected?.projects?.[0];
   const create = async () => {
     setBusy(true);
     setErr(null);
@@ -51,8 +54,9 @@ function Picker({ onProject }: { onProject: (p: Project) => void }) {
         <div className="row">
           <input className="grow" placeholder="C:\path\to\DJI_0001.MP4" value={path}
             onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} />
-          <button className="primary" disabled={!path || busy} onClick={create}>{busy ? "Probing…" : "Create project"}</button>
+          <button className="primary" disabled={!path || busy} onClick={create}>{busy ? "Probing…" : owner ? "Open project" : "Create project"}</button>
         </div>
+        {owner && <p className="small muted">This video already has a project, <b>{owner.name}</b>: it opens instead of making another.</p>}
         {err && <div className="banner error">{err}</div>}
         {dir && (
           <div className="browser">
@@ -68,7 +72,12 @@ function Picker({ onProject }: { onProject: (p: Project) => void }) {
                     else { setPath(e.path); localStorage.setItem("speedcam.lastDir", dir.path); }
                   }}
                   onDoubleClick={() => !e.dir && create()}>
-                  <span>{e.dir ? "📁" : "🎞"} {e.name}</span>
+                  <span className="grow ellipsis">{e.dir ? "📁" : "🎞"} {e.name}</span>
+                  {!e.dir && e.projects && e.projects.length > 0 && (
+                    <span className="tag ok" title={`Has a project: ${e.projects.map((x) => x.name).join(", ")}. Opening the video opens it.`}>
+                      {e.projects.length > 1 ? `${e.projects.length} projects` : "project"}
+                    </span>
+                  )}
                   {!e.dir && <span className="muted">{((e.size ?? 0) / 1e6).toFixed(0)} MB</span>}
                 </li>
               ))}

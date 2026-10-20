@@ -91,7 +91,16 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    project folders are the source of truth, so deleting the database only loses
    job history. Decoded full-res frames, thumbnails and overlay data are cached
    under each project's `cache/` folder.
-1. **Import:** pick a video on disk. Nothing is uploaded. The server builds a 1080p
+   **Jobs** (top bar) lists every job of every project, newest first: analyses,
+   recomputes, renders, previews and proxies, with status, duration and what each came
+   to. Each finished analysis, recompute and render keeps its own copy of what it
+   produced (results JSON/CSV, violations, tracks, the MP4, and the settings it ran
+   with) in `<project>/jobs/<job id>/`, so earlier runs stay downloadable after the
+   project's results or video are replaced. A job's copies can be deleted to free space;
+   the page shows how much they take.
+1. **Import:** pick a video on disk. Each video has one project: picking a video that
+   already has one opens it (the picker tags those videos, and the library marks older
+   duplicates). Nothing is uploaded. The server builds a 1080p
    H.264 proxy for scrubbing. Confirm `capture_fps`. **DJI slow-motion clips** are
    stored at e.g. 30 fps, but were captured at 100/120 fps. Real time is always
    `frame / capture_fps`.

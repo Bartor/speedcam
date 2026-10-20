@@ -35,13 +35,17 @@ export default function ProjectLibrary() {
       {items === null && <p className="muted">Loading…</p>}
       {items?.length === 0 && <p className="muted">No projects yet. Pick a video on the left to create one.</p>}
       <div className="lib-grid">
-        {shown.map((p) => <Card key={p.id} p={p} job={jobs.find((j) => j.project_id === p.id)} onDelete={() => remove(p)} />)}
+        {shown.map((p) => <Card key={p.id} p={p} job={jobs.find((j) => j.project_id === p.id)} onDelete={() => remove(p)}
+          twins={(items ?? []).filter((x) => x.id !== p.id && sameFile(x.source, p.source)).length} />)}
       </div>
     </section>
   );
 }
 
-function Card({ p, job, onDelete }: { p: LibraryProject; job?: ActiveJob; onDelete: () => void }) {
+/** Same video file, whatever the case or slashes (Windows paths). */
+const sameFile = (a: string, b: string) => a.replace(/\//g, "\\").toLowerCase() === b.replace(/\//g, "\\").toLowerCase();
+
+function Card({ p, job, onDelete, twins }: { p: LibraryProject; job?: ActiveJob; onDelete: () => void; twins: number }) {
   const [thumbOk, setThumbOk] = useState(true);
   const screen = p.last_screen ?? (p.has_results ? "results" : p.calibrated ? "process" : "calibrate");
   const open = () => (window.location.hash = `#/p/${p.id}/${screen}`);
@@ -68,13 +72,14 @@ function Card({ p, job, onDelete }: { p: LibraryProject; job?: ActiveJob; onDele
           {p.width}×{p.height}{p.capture_fps ? ` · ${fmt(p.capture_fps, 2)} fps` : ""}{p.duration_s ? ` · ${fmt(p.duration_s, 1)} s` : ""}
         </div>
         {p.has_results ? (
-          <div className="small">mean <b>{fmt(p.mean_kmh)}</b> · p85 <b>{fmt(p.p85_kmh)}</b> km/h</div>
+          <div className="small" title="Of each vehicle's max speed">max: mean <b>{fmt(p.mean_kmh)}</b> · p85 <b>{fmt(p.p85_kmh)}</b> km/h</div>
         ) : (
           <div className="small muted">{p.calibrated ? "calibrated, not analysed" : p.capture_fps ? "needs calibration" : "needs capture fps"}</div>
         )}
         <div className="row small lib-foot">
           {!p.source_exists && <span className="tag bad" title="Open the project to point it at the moved file">video missing</span>}
           {p.has_render ? <span className="tag">rendered</span> : null}
+          {twins > 0 && <span className="tag warn" title="Other projects use the same video. New ones aren't made any more; delete the ones you don't need.">same video ×{twins + 1}</span>}
           <span className="muted grow">opened {timeAgo(p.opened)}</span>
           <button className="x" title="Delete project" onClick={(e) => { e.stopPropagation(); onDelete(); }}>✕</button>
         </div>

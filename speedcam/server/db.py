@@ -106,6 +106,20 @@ class Database:
             out.append(d)
         return out
 
+    def all_jobs(self, limit: int = 500) -> list[dict]:
+        """Job history across projects, newest first."""
+        rows = self._exec("SELECT * FROM jobs ORDER BY created DESC LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["result"] = json.loads(d["result"]) if d["result"] else None
+            out.append(d)
+        return out
+
+    def job(self, jid: str) -> Optional[dict]:
+        rows = self._exec("SELECT * FROM jobs WHERE id=?", (jid,))
+        return dict(rows[0]) if rows else None
+
     def mark_interrupted(self) -> int:
         """Jobs left queued/running by a previous server process can never finish."""
         rows = self._exec("SELECT id FROM jobs WHERE status IN ('queued', 'running')")

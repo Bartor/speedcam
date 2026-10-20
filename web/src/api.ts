@@ -172,6 +172,13 @@ export interface Violations {
 }
 export const PHASE_COLORS: Record<string, string> = { red: "#eb4034", amber: "#ffb020", green: "#2ecc71", "not red": "#5b6270", unknown: "#3a3f48" };
 
+export interface JobHistoryRow {
+  id: string; project_id: string; project_name: string | null; kind: string; status: string;
+  created: number; started: number | null; finished: number | null; error: string | null; result: any;
+  progress?: { stage?: string; done?: number; total?: number; fps?: number };
+  files: { name: string; size: number }[];
+}
+
 export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
@@ -202,7 +209,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
-  fs: (path?: string) => req<{ path: string; parent: string; entries: { name: string; path: string; dir: boolean; size?: number }[] }>(
+  fs: (path?: string) => req<{ path: string; parent: string; entries: { name: string; path: string; dir: boolean; size?: number; projects?: { id: string; name: string }[] }[] }>(
     "GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   projects: () => req<LibraryProject[]>("GET", "/api/projects"),
   opened: (id: string, screen: string) => req<{ ok: boolean }>("POST", `/api/projects/${id}/opened`, { screen }),
@@ -210,7 +217,7 @@ export const api = {
   remove: (id: string) => req<{ deleted: string }>("DELETE", `/api/projects/${id}`),
   jobs: (id: string) => req<JobRecord[]>("GET", `/api/projects/${id}/jobs`),
   thumbUrl: (id: string) => `/api/projects/${id}/thumb.jpg`,
-  create: (source: string, name?: string) => req<Project>("POST", "/api/projects", { source, name }),
+  create: (source: string, name?: string) => req<Project & { existing?: boolean }>("POST", "/api/projects", { source, name }),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),
   patch: (id: string, body: Record<string, unknown>) => req<Project>("PATCH", `/api/projects/${id}`, body),
   readLights: (id: string, frame: number) =>
@@ -229,6 +236,9 @@ export const api = {
   putValidation: (id: string, references: Reference[]) =>
     req<Validation>("PUT", `/api/projects/${id}/validation`, { references }),
   cancel: (jobId: string) => req<Job>("POST", `/api/jobs/${jobId}/cancel`),
+  jobHistory: () => req<{ jobs: JobHistoryRow[]; artifacts_bytes: number }>("GET", "/api/jobs/history"),
+  jobFileUrl: (jobId: string, name: string) => `/api/jobs/${jobId}/files/${encodeURIComponent(name)}`,
+  deleteJobFiles: (jobId: string) => req<{ deleted: boolean }>("DELETE", `/api/jobs/${jobId}/files`),
   rebuildProxy: (id: string) => req<Job>("POST", `/api/projects/${id}/proxy`),
   frameUrl: (id: string, n: number) => `/api/projects/${id}/frame/${n}`,
   proxyUrl: (id: string) => `/api/projects/${id}/proxy.mp4`,

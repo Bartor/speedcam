@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,6 +20,7 @@ from .. import calibration as calib
 from ..config import Calibration, ProjectConfig
 from ..timing import check_timing
 from ..validation import Reference, evaluate
+from . import artifacts
 from .jobs import JobManager
 from .projects import OUTPUT_FILES, ProjectStore
 
@@ -36,6 +38,11 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
     store.db.mark_interrupted()
 
     def on_job_change(job) -> None:
+        if job.status == "done":
+            try:  # keep this job's outputs; later runs overwrite the project's copies
+                artifacts.archive(Path(job.project_dir), job.id, job.kind)
+            except OSError:
+                pass
         store.db.record_job(job.public())
         if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render"):
             store.refresh(job.project_id)
@@ -104,6 +111,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         if not p.is_dir():
             raise HTTPException(404, f"{p} is not a directory")
         entries = []
+        used = store.by_source()  # videos that already have a project
         try:
             for e in sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
                 if e.name.startswith("."):
@@ -112,7 +120,8 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
                     if e.is_dir():
                         entries.append({"name": e.name, "path": str(e), "dir": True})
                     elif e.suffix.lower() in VIDEO_EXT:
-                        entries.append({"name": e.name, "path": str(e), "dir": False, "size": e.stat().st_size})
+                        entries.append({"name": e.name, "path": str(e), "dir": False, "size": e.stat().st_size,
+                                        "projects": used.get(store.source_key(e), [])})
                 except OSError:
                     continue
         except PermissionError:
@@ -126,6 +135,10 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
 
     @app.post("/api/projects")
     def create_project(body: CreateProject):
+        # one project per video: opening a video that already has one returns that project
+        existing = store.by_source().get(store.source_key(body.source)) if body.source.strip() else None
+        if existing:
+            return {**_project(existing[0]["id"]), "existing": True}
         try:
             data = store.create(body.source, body.name)
         except FileNotFoundError as e:
@@ -295,7 +308,19 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
             raise HTTPException(400, "run analysis first")
         from ..pipeline import recompute as _recompute
 
-        _recompute(store.config(pid), d)
+        # recorded like a job, so its results show (and stay downloadable) in the jobs history
+        rec = {"id": uuid.uuid4().hex[:12], "project_id": pid, "kind": "recompute", "status": "running",
+               "created": time.time(), "started": time.time()}
+        try:
+            summary = _recompute(store.config(pid), d)
+        except Exception as e:
+            store.db.record_job({**rec, "status": "error", "finished": time.time(), "error": f"{type(e).__name__}: {e}"})
+            raise
+        rec.update(status="done", finished=time.time(),
+                   result={"n_vehicles": len(summary["vehicles"]),
+                           "n_valid": sum(v["valid"] for v in summary["vehicles"])})
+        artifacts.archive(d, rec["id"], "recompute")
+        store.db.record_job(rec)
         store.refresh(pid)
         return get_results(pid)
 
@@ -384,6 +409,49 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         names = {r["id"]: r["name"] for r in store.list()}
         return {"slots": jobs.slots, "gpu_slots": jobs.gpu_slots,
                 "jobs": [j.brief() | {"project_name": names.get(j.project_id, j.project_id)} for j in jobs.active()]}
+
+    @app.get("/api/jobs/history")
+    def job_history(limit: int = 500):
+        """Every job, newest first, across projects (the database keeps them across restarts),
+        with live status for running ones and the files each finished job left."""
+        names = {r["id"]: r["name"] for r in store.list()}
+        live = {j.id: j for j in jobs.jobs.values()}
+        out = []
+        for r in store.db.all_jobs(limit):
+            j = live.get(r["id"])
+            if j is not None:
+                r.update(status=j.status, started=j.started, finished=j.finished, error=j.error)
+                r["progress"] = j.progress
+            pdir = store.root / r["project_id"]
+            r["project_name"] = names.get(r["project_id"])
+            r["files"] = artifacts.listing(pdir, r["id"], r["kind"]) if pdir.is_dir() else []
+            out.append(r)
+        total = sum(f["size"] for r in out for f in r["files"])
+        return {"jobs": out, "artifacts_bytes": total}
+
+    def _job_record(jid: str) -> dict:
+        r = store.db.job(jid)
+        if not r:
+            raise HTTPException(404, "job not found")
+        return r
+
+    @app.get("/api/jobs/{jid}/files/{name}")
+    def job_file(jid: str, name: str):
+        r = _job_record(jid)
+        if name not in artifacts.ALLOWED:
+            raise HTTPException(404)
+        p = artifacts.job_dir(store.root / r["project_id"], jid) / name
+        if not p.is_file():
+            raise HTTPException(404, f"{name} not kept for this job")
+        when = time.strftime("%Y%m%d-%H%M", time.localtime(r["created"] or 0))
+        return FileResponse(p, filename=f"{r['project_id']}-{r['kind']}-{when}-{name}")
+
+    @app.delete("/api/jobs/{jid}/files")
+    def delete_job_files(jid: str):
+        """Free the disk space a job's copies take; its record stays."""
+        r = _job_record(jid)
+        artifacts.delete(store.root / r["project_id"], jid)
+        return {"deleted": True}
 
     @app.get("/api/jobs")
     def list_jobs():

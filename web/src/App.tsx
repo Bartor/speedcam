@@ -5,6 +5,7 @@ import CalibrateScreen from "./screens/CalibrateScreen";
 import ProcessScreen from "./screens/ProcessScreen";
 import ResultsScreen from "./screens/ResultsScreen";
 import JobsIndicator from "./components/JobsIndicator";
+import JobsPage from "./screens/JobsPage";
 
 export type Screen = "import" | "calibrate" | "process" | "results";
 const SCREENS: { key: Screen; label: string }[] = [
@@ -38,7 +39,8 @@ const BrandMark = () => (
   </span>
 );
 
-function parseHash(): { id: string | null; screen: Screen } {
+function parseHash(): { id: string | null; screen: Screen; jobs?: boolean } {
+  if (window.location.hash.startsWith("#/jobs")) return { id: null, screen: "import", jobs: true };
   const m = window.location.hash.match(/^#\/p\/([a-z0-9-]+)(?:\/(\w+))?/);
   if (!m) return { id: null, screen: "import" };
   const s = (m[2] as Screen) || "import";
@@ -81,7 +83,7 @@ export default function App() {
         <nav aria-label="Workflow steps">
           <ol className="steps">
             {SCREENS.map((s, i) => {
-              const active = route.screen === s.key, done = stepDone(p, s.key);
+              const active = !route.jobs && route.screen === s.key, done = stepDone(p, s.key);
               return (
                 <li key={s.key} className={done ? "done" : ""}>
                   <button className={`step${active ? " active" : ""}${done ? " done" : ""}`} aria-current={active ? "step" : undefined}
@@ -94,11 +96,13 @@ export default function App() {
           </ol>
         </nav>
         <div className="project-name" title={p?.name}>{p ? p.name : ""}</div>
+        <a className={`jobs-link${route.jobs ? " active" : ""}`} href="#/jobs" title="Every job, with the files each one produced">Jobs</a>
         <JobsIndicator />
       </header>
       {error && <div className="banner error">{error}</div>}
       <main>
-        {route.screen === "import" && (
+        {route.jobs && <JobsPage />}
+        {!route.jobs && route.screen === "import" && (
           <ImportScreen project={p} onProject={(np) => { setProject(np); go("import", np.id); }}
             onChanged={setProject} onNext={() => go("calibrate")} />
         )}

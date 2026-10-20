@@ -61,7 +61,7 @@ def run_job(kind: str, project_dir: str, q, cancel_event, params: Optional[dict]
             from ..pipeline import analyze
 
             summary = analyze(cfg, d, rep)
-            result = {"n_vehicles": len(summary["vehicles"]), "n_valid": summary["stats"]["n_valid"]}
+            result = {"n_vehicles": len(summary["vehicles"]), "n_valid": sum(v["valid"] for v in summary["vehicles"])}
         elif kind == "render":
             from ..render import render
 
