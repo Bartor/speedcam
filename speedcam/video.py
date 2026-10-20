@@ -216,3 +216,26 @@ class FFmpegWriter:
     def abort(self) -> None:
         self.proc.kill()
         self.proc.wait()
+
+
+_ROTATE_CODES = {90: 0, 180: 1, 270: 2}  # cv2.ROTATE_90_CLOCKWISE, ROTATE_180, ROTATE_90_COUNTERCLOCKWISE
+
+
+def rotate_frame(img: np.ndarray, degrees: int) -> np.ndarray:
+    """Rotate an image clockwise by 0/90/180/270 degrees."""
+    import cv2
+
+    return img if degrees % 360 == 0 else cv2.rotate(img, _ROTATE_CODES[degrees % 360])
+
+
+def rotation_matrix(degrees: int, w: int, h: int) -> np.ndarray:
+    """3x3 map from pixels of a w x h image to the same pixels after rotate_frame (pixel centres
+    at integers)."""
+    d = degrees % 360
+    if d == 90:
+        return np.array([[0, -1, h - 1], [1, 0, 0], [0, 0, 1]], float)
+    if d == 180:
+        return np.array([[-1, 0, w - 1], [0, -1, h - 1], [0, 0, 1]], float)
+    if d == 270:
+        return np.array([[0, 1, 0], [-1, 0, w - 1], [0, 0, 1]], float)
+    return np.eye(3)

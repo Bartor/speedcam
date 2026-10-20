@@ -302,6 +302,9 @@ class UncertaintySettings(BaseModel):
 
 class ProjectConfig(BaseModel):
     source: str
+    # how the video is shown, previewed and rendered: degrees clockwise. View only: analysis and
+    # every stored coordinate stay in the original frame, so changing it never needs re-analysis
+    rotation: Literal[0, 90, 180, 270] = 0
     capture_fps: Optional[float] = None
     real_duration_s: Optional[float] = None
     start_frame: int = 0

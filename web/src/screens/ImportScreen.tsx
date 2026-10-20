@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import RotateButtons from "../components/RotateButtons";
 import { api, fmt, JobRecord, Project, timeAgo, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
 import "../components/library.css";
@@ -156,6 +157,8 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
             <input type="number" step="any" value={fps} onChange={(e) => setFps(e.target.value)} />
             {[25, 30, 50, 60, 100, 120].map((v) => <button key={v} className="chip" onClick={() => setFps(String(v))}>{v}</button>)}
           </div>
+          <label title="Only how the video is shown and rendered: calibration and results are unaffected">View rotation</label>
+          <div><RotateButtons project={project} onChanged={onChanged} /></div>
           <label>Known real duration (s, optional check)</label>
           <input type="number" step="any" value={dur} onChange={(e) => setDur(e.target.value)} placeholder="e.g. from flight log" />
           <label>Resulting real duration</label>

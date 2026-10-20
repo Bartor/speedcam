@@ -26,7 +26,7 @@ from .pipeline import Reporter, find_violations, margin_of_error, resolve_captur
 from .speed import TrackRender, compute_speeds
 from .stabilization import transform_points
 from .timing import probe
-from .video import FFmpegReader, FFmpegWriter
+from .video import FFmpegReader, FFmpegWriter, rotate_frame, rotation_matrix
 
 # colours are RGB (PIL); frames are BGR (OpenCV)
 WHITE = (255, 255, 255)
@@ -197,7 +197,9 @@ class Panel:
         self.t, self.rs = typo, rs
         self.W, self.H = size
         self.opaque = opaque
-        self.k = self.H / 1080
+        # 518 px = the default panel width beside 1080p video: a narrow panel (e.g. beside a
+        # portrait video) scales its text down to fit
+        self.k = min(self.H / 1080, self.W / 518)
         self.items = sorted([r for r in results if r["valid"]], key=lambda r: r["t_exit_s"])
         self.many_paths = len({r.get("path") for r in results if r.get("path")}) > 1
         self._key = None
@@ -411,6 +413,8 @@ class Overlay:
         self.H_inv = np.linalg.inv(cal.H)
         self.k = self.H / 1080
         self.lw = max(1, int(round(2 * self.k)))
+        self.rot = cfg.rotation
+        self.R = rotation_matrix(self.rot, self.W, self.H)
         self.typo = typo or Typography(self.rs.font)
         self.pills = Pills(self.typo, self.k)
         self.T_frames, self.T = transforms["frames"], transforms["T"]
@@ -506,6 +510,9 @@ class Overlay:
             to_disp = self.S
         else:
             to_disp = self.S @ np.linalg.inv(T)
+        if self.rot:  # everything below is drawn on the rotated frame
+            frame = rotate_frame(frame, self.rot)
+            to_disp = self.R @ to_disp
         t = n / self.fps
         cal = self.cfg.calibration
         limit = self.rs.speed_limit_kmh
@@ -600,6 +607,9 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     H = max(2, int(round(info.height * rs.scale / 2)) * 2)
     typo = Typography(rs.font)
     overlay = Overlay(cfg, fps, cal, renders, tracks, transforms, (W, H), (info.width, info.height), typo, viol)
+    reader = FFmpegReader(cfg.source, W, H, rs.lut)
+    if cfg.rotation in (90, 270):  # the output (and the panel beside it) is the rotated frame
+        W, H = H, W
 
     panel = None
     out_w = W
@@ -618,7 +628,6 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     ratio = rs.playback_speed * fps / out_fps  # source frames per output frame
     n_out = int(math.floor((info.nb_frames - 1) / ratio)) + 1
 
-    reader = FFmpegReader(cfg.source, W, H, rs.lut)
     writer = FFmpegWriter(dst, out_w, H, out_fps, rs.encoder, rs.quality)
     canvas = np.zeros((H, out_w, 3), np.uint8)
     j = 0
@@ -651,7 +660,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     meta = {"file": dst.name, "output_fps": out_fps, "playback_speed": rs.playback_speed, "scale": rs.scale,
             "mode": rs.mode, "frames": j, "width": out_w, "height": H, "codec": writer.codec,
             "capture_fps": fps, "panel": rs.panel, "panel_layout": rs.panel_layout,
-            "video_x": video_x, "video_width": W}
+            "video_x": video_x, "video_width": W, "rotation": cfg.rotation}
     (out / "render.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     reporter.progress("done", 1, 1)
     return meta

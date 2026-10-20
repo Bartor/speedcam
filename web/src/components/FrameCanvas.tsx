@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calibration, LIGHT_COLORS, PATH_COLORS, PathDraw, Pt, SOLID_COLOR, StopDirection } from "../api";
+import { Calibration, LIGHT_COLORS, PATH_COLORS, PathDraw, Pt, rotPt, SOLID_COLOR, StopDirection, unrotPt } from "../api";
 
 export type Tool = "move" | "path" | "polygon" | "rect" | "segment" | "lineA" | "lineB" | "roi" | "point" | "light" | "stopline" | "solid";
 
@@ -58,15 +58,18 @@ interface Props {
   activeSetup?: number;
   onRuleAdded?: () => void;
   selected?: { kind: string; i: number } | null;
+  /** view rotation (degrees clockwise); points stay in original-frame px */
+  rotation?: number;
 }
 
 const COLORS = { path: "#00c8ff", poly: "#b98cff", seg: "#f5c518", a: "#00c8ff", b: "#ff3cc8", roi: "#4cd97b", pt: "#ff8c3a", pending: "#ff5050" };
 const NEEDED: Partial<Record<Tool, number>> = { rect: 4, segment: 2, lineA: 2, lineB: 2, point: 1, light: 1 };
 
-export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, pathsDraw, onPathAdded, activeSetup = 0, onRuleAdded, selected }: Props) {
+export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, onRectAdded, onPolygonAdded, lineGapM, pathsDraw, onPathAdded, activeSetup = 0, onRuleAdded, selected, rotation = 0 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
+  // the frame as shown (rotated copy when the view is rotated); w, h its size, sw, sh the source's
+  const imgRef = useRef<{ el: CanvasImageSource; w: number; h: number; sw: number; sh: number } | null>(null);
   const view = useRef({ zoom: 1, ox: 0, oy: 0 });
   const [, force] = useState(0);
   const redraw = useCallback(() => force((n) => n + 1), []);
@@ -78,8 +81,8 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
   const fit = useCallback(() => {
     const img = imgRef.current, wrap = wrapRef.current;
     if (!img || !wrap) return;
-    const z = Math.min(wrap.clientWidth / img.naturalWidth, wrap.clientHeight / img.naturalHeight);
-    view.current = { zoom: z, ox: (wrap.clientWidth - img.naturalWidth * z) / 2, oy: (wrap.clientHeight - img.naturalHeight * z) / 2 };
+    const z = Math.min(wrap.clientWidth / img.w, wrap.clientHeight / img.h);
+    view.current = { zoom: z, ox: (wrap.clientWidth - img.w * z) / 2, oy: (wrap.clientHeight - img.h * z) / 2 };
     redraw();
   }, [redraw]);
 
@@ -87,13 +90,23 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     setLoaded(false);
     const img = new Image();
     img.onload = () => {
-      const first = !imgRef.current;
-      imgRef.current = img;
+      const prev = imgRef.current;
+      const sw = img.naturalWidth, sh = img.naturalHeight;
+      let el: CanvasImageSource = img, w = sw, h = sh;
+      if (rotation) {
+        const c = document.createElement("canvas");
+        [w, h] = rotation === 180 ? [sw, sh] : [sh, sw];
+        c.width = w; c.height = h;
+        const g = c.getContext("2d")!;
+        g.translate(w / 2, h / 2); g.rotate((rotation * Math.PI) / 180); g.drawImage(img, -sw / 2, -sh / 2);
+        el = c;
+      }
+      imgRef.current = { el, w, h, sw, sh };
       setLoaded(true);
-      if (first) fit(); else redraw();
+      if (!prev || prev.w !== w || prev.h !== h) fit(); else redraw();
     };
     img.src = src;
-  }, [src, fit, redraw]);
+  }, [src, rotation, fit, redraw]);
 
   useEffect(() => setPending([]), [tool]);
 
@@ -105,14 +118,16 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     return () => ro.disconnect();
   }, [redraw]);
 
-  // image px (OpenCV convention: pixel centres at integers) <-> screen px
+  // source px (OpenCV convention: pixel centres at integers) <-> rotated view px <-> screen px
+  const srcW = imgRef.current?.sw ?? 1, srcH = imgRef.current?.sh ?? 1;
   const toScreen = (p: Pt): Pt => {
     const v = view.current;
-    return [(p[0] + 0.5) * v.zoom + v.ox, (p[1] + 0.5) * v.zoom + v.oy];
+    const q = rotPt(p, rotation, srcW, srcH);
+    return [(q[0] + 0.5) * v.zoom + v.ox, (q[1] + 0.5) * v.zoom + v.oy];
   };
   const toImage = (sx: number, sy: number): Pt => {
     const v = view.current;
-    return [(sx - v.ox) / v.zoom - 0.5, (sy - v.oy) / v.zoom - 0.5];
+    return unrotPt([(sx - v.ox) / v.zoom - 0.5, (sy - v.oy) / v.zoom - 0.5], rotation, srcW, srcH);
   };
 
   const handles = (): { h: Handle; p: Pt }[] => {
@@ -297,7 +312,7 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     if (!img) return;
     const v = view.current;
     ctx.imageSmoothingEnabled = v.zoom < 2;
-    ctx.drawImage(img, v.ox, v.oy, img.naturalWidth * v.zoom, img.naturalHeight * v.zoom);
+    ctx.drawImage(img.el, v.ox, v.oy, img.w * v.zoom, img.h * v.zoom);
 
     const line = (a: Pt, b: Pt, color: string, w = 2, dash: number[] = []) => {
       const [x0, y0] = toScreen(a), [x1, y1] = toScreen(b);
@@ -441,13 +456,14 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     if (tool !== "move" && m.inside && !drag.current) {
       const R = 80, mag = Math.max(v.zoom * 4, 3);
       const src = (R / mag);
-      const cx = cursor[0] + 0.5, cy = cursor[1] + 0.5;
+      const rc = rotPt(cursor, rotation, srcW, srcH);
+      const cx = rc[0] + 0.5, cy = rc[1] + 0.5;
       const lx = m.sx > W - 2 * R - 40 && m.sy < 2 * R + 40 ? 12 : W - 2 * R - 12, ly = 12;
       ctx.save();
       ctx.beginPath(); ctx.rect(lx, ly, 2 * R, 2 * R); ctx.clip();
       ctx.imageSmoothingEnabled = false;
       ctx.fillStyle = "#000"; ctx.fillRect(lx, ly, 2 * R, 2 * R);
-      ctx.drawImage(img, cx - src, cy - src, 2 * src, 2 * src, lx, ly, 2 * R, 2 * R);
+      ctx.drawImage(img.el, cx - src, cy - src, 2 * src, 2 * src, lx, ly, 2 * R, 2 * R);
       ctx.strokeStyle = "rgba(255,80,80,.9)"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(lx + R, ly); ctx.lineTo(lx + R, ly + 2 * R); ctx.moveTo(lx, ly + R); ctx.lineTo(lx + 2 * R, ly + R); ctx.stroke();
       ctx.restore();

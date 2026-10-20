@@ -95,6 +95,13 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    H.264 proxy for scrubbing. Confirm `capture_fps`. **DJI slow-motion clips** are
    stored at e.g. 30 fps, but were captured at 100/120 fps. Real time is always
    `frame / capture_fps`.
+   **View rotation** (⟲ ⟳ here and on the Calibrate screen) turns the picture by 90°
+   steps, e.g. for a drone shot with the road running across the frame. It only
+   changes how the video is shown, previewed and rendered. Calibration, tracks and
+   results stay in the original frame's pixels, so it works on analysed clips
+   straight away, with nothing to re-run. A rendered MP4 is rotated as it was at
+   render time (90°/270° gives a portrait video; with the side panel, widen the
+   panel or put it beside the video, since its text scales to the panel's width).
 2. **Calibrate:** choose a reference frame. For any view that isn't straight down,
    use **Polygon**: click 4+ flat ground points, then type measured sides and
    diagonals. A polygon with N corners needs 2N−3 distances to fix its shape (a

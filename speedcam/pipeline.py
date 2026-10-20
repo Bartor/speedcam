@@ -24,7 +24,7 @@ from .stabilization import Stabilizer, transform_points
 from .stats import summarize
 from .timing import check_timing, probe
 from .tracking import Tracker
-from .video import FrameGrabber, iter_frames
+from .video import FrameGrabber, iter_frames, rotate_frame
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def _track_color(tid: int) -> tuple[int, int, int]:
 
 
 def _preview_jpeg(frame: np.ndarray, corners: np.ndarray, ids: np.ndarray, trails: dict,
-                  lines: list, text: str, width: int = 1280) -> bytes:
+                  lines: list, text: str, width: int = 1280, rotation: int = 0) -> bytes:
     """Tracking preview: boxes coloured by track id, id labels, trails and lines A/B (all frame px)."""
     k = width / frame.shape[1]
     img = cv2.resize(frame, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
@@ -96,6 +96,7 @@ def _preview_jpeg(frame: np.ndarray, corners: np.ndarray, ids: np.ndarray, trail
             org = (int(p[:, 0].min()), int(p[:, 1].min()) - 5)
             cv2.putText(img, f"#{tid}", org, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(img, f"#{tid}", org, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    img = rotate_frame(img, rotation)
     cv2.putText(img, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)
     cv2.putText(img, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])[1].tobytes()
@@ -301,7 +302,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
                          (("A", cfg.calibration.line_a, (255, 200, 0)), ("B", cfg.calibration.line_b, (255, 0, 200)))
                          if l]
             text = f"frame {i}  t {i / fps:.2f} s  {len(dets)} det  {len(live)} tracked  {len(seen_tracks)} tracks so far"
-            reporter.preview(_preview_jpeg(frame, dets.corners, ids, trails, lines, text))
+            reporter.preview(_preview_jpeg(frame, dets.corners, ids, trails, lines, text, rotation=cfg.rotation))
 
     def track_chunk(chunk, dets_list) -> None:
         for (i, f), d in zip(chunk, dets_list):

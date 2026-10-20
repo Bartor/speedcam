@@ -497,3 +497,12 @@ table.vehicles tr.invalid td.strong { color: var(--muted); font-weight: 600; }
   *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; }
   button:active:not(:disabled) { transform: none; }
 }
+
+/* rotated view (project rotation): the <video> is turned inside a box it fills */
+.rot-box { position: relative; overflow: hidden; background: #000; }
+.rot-box > video { position: absolute; left: 50%; top: 50%; max-height: none; object-fit: contain; display: block; }
+.video-wrap.rotated .rot-box { width: 100%; height: 58vh; }
+.video-controls { display: flex; align-items: center; gap: var(--s-2); margin-top: 6px; }
+.video-controls .time { font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; }
+.rotate-btns { display: inline-flex; align-items: center; gap: 2px; margin-left: var(--s-2); }
+.rotate-btns button { min-height: 22px; padding: 0 6px; }

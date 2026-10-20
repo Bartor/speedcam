@@ -8,6 +8,7 @@ import ProgressBar from "../components/ProgressBar";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
 import SpeedProfile from "../components/SpeedProfile";
 import ViolationsPanel from "../components/ViolationsPanel";
+import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
 
 interface Props { project: Project; onChanged: (p: Project) => void }
 
@@ -60,6 +61,9 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   const rjob = useJob(renderJob, () => { load(); api.project(project.id).then(onChanged); });
 
   const useRender = source === "render" && !!res?.render;
+  // the rendered MP4 is already rotated (as it was when rendered); the proxy is rotated here
+  const rotation = project.config.rotation ?? 0;
+  const viewRot = useRender ? 0 : rotation;
   const fps = res?.capture_fps ?? project.config.capture_fps ?? project.info.container_fps;
   // proxy frames are 1:1 with the source; render time = real time / playback_speed
   const { frame, mediaTime } = useVideoFrame(video, useRender ? (res!.render!.output_fps) : project.info.container_fps);
@@ -124,11 +128,12 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   return (
     <div className="results">
       <div className="res-left">
-        <div className="video-wrap">
-          <video key={useRender ? "r" : "p"} ref={setVideo} controls muted playsInline preload="auto"
+        <div className={`video-wrap${viewRot ? " rotated" : ""}`}>
+          <RotatedVideo key={useRender ? "r" : "p"} rotation={viewRot} videoRef={setVideo} controls muted playsInline preload="auto"
             src={useRender ? `${api.fileUrl(project.id, "render.mp4")}?v=${res.render!.file}${rjob.end?.id ?? ""}` : api.proxyUrl(project.id)} />
-          {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} />}
+          {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} rotation={viewRot} />}
         </div>
+        {viewRot !== 0 && <VideoControls video={video} />}
         <div className="video-bar small">
           <span className="time-readout">t = <b>{tNow.toFixed(3)}</b> s real</span>
           <span className="grow" />

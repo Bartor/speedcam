@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Phase, PATH_COLORS, PHASE_COLORS, Pt } from "../api";
+import { Phase, PATH_COLORS, PHASE_COLORS, Pt, rotPt, rotSize } from "../api";
 
 export interface OverlayData {
   width: number; height: number; capture_fps: number; container_fps: number;
@@ -29,7 +29,7 @@ function speedColor(v: number, limit: number) {
 }
 
 /** Draws boxes, trails, lines and speed labels over a <video> showing the original framing (proxy). */
-export default function TrackOverlay({ data, video, frame }: { data: OverlayData; video: HTMLVideoElement | null; frame: number }) {
+export default function TrackOverlay({ data, video, frame, rotation = 0 }: { data: OverlayData; video: HTMLVideoElement | null; frame: number; rotation?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const byFrame = useMemo(() => {
@@ -41,7 +41,9 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !video) return;
-    const W = video.clientWidth, H = video.clientHeight, dpr = window.devicePixelRatio || 1;
+    // a rotated video fills its box (the overlay's parent); unrotated, the <video> itself
+    const host = rotation ? canvas.parentElement ?? video : video;
+    const W = host.clientWidth, H = host.clientHeight, dpr = window.devicePixelRatio || 1;
     if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
       canvas.width = W * dpr; canvas.height = H * dpr;
       canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
@@ -49,9 +51,10 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    // letterboxed content rect of the video element (object-fit: contain)
-    const s = Math.min(W / data.width, H / data.height);
-    const ox = (W - data.width * s) / 2, oy = (H - data.height * s) / 2;
+    // letterboxed content rect of the (rotated) picture (object-fit: contain)
+    const [vw, vh] = rotSize(data.width, data.height, rotation);
+    const s = Math.min(W / vw, H / vh);
+    const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
 
     // reference px -> frame px for this frame (nearest stored transform)
     let lo = 0, hi = data.T_frames.length - 1;
@@ -59,7 +62,8 @@ export default function TrackOverlay({ data, video, frame }: { data: OverlayData
     const M = data.T_inv[lo] ?? [1, 0, 0, 0, 1, 0, 0, 0, 1];
     const P = (x: number, y: number): Pt => {
       const w = M[6] * x + M[7] * y + M[8];
-      return [((M[0] * x + M[1] * y + M[2]) / w) * s + ox, ((M[3] * x + M[4] * y + M[5]) / w) * s + oy];
+      const q = rotPt([(M[0] * x + M[1] * y + M[2]) / w, (M[3] * x + M[4] * y + M[5]) / w], rotation, data.width, data.height);
+      return [q[0] * s + ox, q[1] * s + oy];
     };
     const fs = Math.max(11, Math.round(13 * (H / 600)));
     ctx.font = `600 ${fs}px system-ui, sans-serif`;

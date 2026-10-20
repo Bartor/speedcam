@@ -2,6 +2,21 @@ import { useEffect, useRef, useState } from "react";
 
 export type Pt = [number, number];
 
+/** View rotation, degrees clockwise. Only how frames are shown: every stored coordinate is in the
+ * original (unrotated) frame. */
+export type Rotation = 0 | 90 | 180 | 270;
+/** a pixel of the w x h source frame -> the same pixel in the frame rotated by `rot` */
+export function rotPt(p: Pt, rot: number, w: number, h: number): Pt {
+  const [x, y] = p;
+  return rot === 90 ? [h - 1 - y, x] : rot === 180 ? [w - 1 - x, h - 1 - y] : rot === 270 ? [y, w - 1 - x] : [x, y];
+}
+export function unrotPt(q: Pt, rot: number, w: number, h: number): Pt {
+  const [u, v] = q;
+  return rot === 90 ? [v, h - 1 - u] : rot === 180 ? [w - 1 - u, h - 1 - v] : rot === 270 ? [w - 1 - v, u] : [u, v];
+}
+/** size of the frame after rotation */
+export const rotSize = (w: number, h: number, rot: number): [number, number] => (rot === 90 || rot === 270 ? [h, w] : [w, h]);
+
 export interface Segment { a: Pt; b: Pt; meters: number }
 export interface ControlPoint { px: Pt; world: Pt }
 export interface PolygonDistance { i: number; j: number; meters: number }
@@ -54,7 +69,7 @@ export interface CalibrationResult {
 }
 
 export interface ProjectConfig {
-  source: string; capture_fps: number | null; real_duration_s: number | null;
+  source: string; rotation?: Rotation; capture_fps: number | null; real_duration_s: number | null;
   start_frame: number; end_frame: number | null;
   calibration: Calibration;
   detection: Record<string, any>; tracking: Record<string, any>; stabilization: Record<string, any>;

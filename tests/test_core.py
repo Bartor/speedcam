@@ -377,3 +377,18 @@ def test_old_auto_model_list_gets_visdrone():
 
     assert DetectionSettings(auto_models=["yolo11x.pt", "yolo11x-obb.pt"]).auto_models[-1] == "visdrone"
     assert DetectionSettings(auto_models=["yolo11x.pt"]).auto_models == ["yolo11x.pt"]
+
+
+@pytest.mark.parametrize("deg", [0, 90, 180, 270])
+def test_rotation_matrix_matches_rotate_frame(deg):
+    from speedcam.video import rotate_frame, rotation_matrix
+
+    img = np.zeros((40, 60), np.uint8)
+    pts = np.array([[3.0, 5.0], [59.0, 0.0], [0.0, 39.0], [17.0, 22.0]])
+    for k, (x, y) in enumerate(pts):
+        img[int(y), int(x)] = 10 + k
+    rot = rotate_frame(img, deg)
+    moved = transform_points(rotation_matrix(deg, 60, 40), pts)
+    for k, (x, y) in enumerate(np.round(moved).astype(int)):
+        assert rot[y, x] == 10 + k
+    assert rot.shape == ((60, 40) if deg in (90, 270) else (40, 60))

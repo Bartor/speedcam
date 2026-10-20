@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
+import RotatedVideo from "../components/RotatedVideo";
+import RotateButtons from "../components/RotateButtons";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onNext: () => void }
 
@@ -165,6 +167,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         <div className="hintbar">
           <span className="hint" title={hint}>{hint}</span>
           <span className="keys"><kbd>Wheel</kbd> zoom · <kbd>Right-drag</kbd> pan · <kbd>Esc</kbd> cancel</span>
+          <RotateButtons project={project} onChanged={onChanged} />
         </div>
         <FrameCanvas src={api.frameUrl(project.id, cal.reference_frame)} cal={cal} tool={tool} onChange={update}
           onSegmentAdded={(i) => { setFocusSeg(i); setTool("move"); }}
@@ -172,10 +175,11 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           onRectAdded={() => { setTool("move"); setTimeout(() => rectW.current?.focus(), 0); }} lineGapM={result.line_gap_m}
           pathsDraw={result.paths} onPathAdded={() => setTool("move")}
           activeSetup={activeSetup} onRuleAdded={() => { if (tool !== "light") setTool("move"); }}
+          rotation={project.config.rotation ?? 0}
           selected={focusSeg !== null ? { kind: "seg", i: focusSeg } : null} />
         <div className="scrubber">
           {project.status.proxy_mp4 ? (
-            <video ref={setVideo} src={api.proxyUrl(project.id)} muted playsInline preload="auto" className="scrub-video"
+            <RotatedVideo rotation={project.config.rotation ?? 0} videoRef={setVideo} src={api.proxyUrl(project.id)} muted playsInline preload="auto" className="scrub-video"
               onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
           ) : <div className="scrub-video placeholder">proxy building…</div>}
           <div className="grow scrub-body">
