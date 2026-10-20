@@ -156,8 +156,14 @@ def build_proxy(src: str | Path, dst: str | Path, total_frames: int, height: int
     with av.open(str(src)) as c:
         fps = _stream_fps(c.streams.video[0])
     gop = max(1, int(round(fps / 2)))
-    cmd = ["ffmpeg", "-hide_banner", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-an",
-           "-vf", f"scale=-2:{height}:flags=bicubic,format=yuv420p", "-fps_mode", "passthrough",
+    # -noautorotate: the proxy keeps the stored orientation, like every decoded frame the analysis
+    # uses (a rotated phone/DJI vertical clip is shown upright by the view rotation instead), and
+    # -display_rotation 0 drops the rotation flag so browsers don't turn it either.
+    # `height` is the short side.
+    scale = f"scale='if(gt(iw,ih),-2,{height})':'if(gt(iw,ih),{height},-2)':flags=bicubic"
+    cmd = ["ffmpeg", "-hide_banner", "-y", "-v", "error", "-noautorotate", "-display_rotation", "0", "-i", str(src),
+           "-map", "0:v:0", "-an",
+           "-vf", f"{scale},format=yuv420p", "-fps_mode", "passthrough",
            "-c:v", codec, *args, *quality_args(codec, 23), "-g", str(gop),
            "-movflags", "+faststart", str(dst)]
     run_ffmpeg_with_progress(cmd, total_frames, progress, should_cancel)
@@ -174,7 +180,7 @@ class FFmpegReader:
         filters.append(f"scale={width}:{height}:flags=bicubic")
         self.w, self.h = width, height
         self.proc = subprocess.Popen(
-            ["ffmpeg", "-hide_banner", "-v", "error", "-i", str(src), "-map", "0:v:0", "-an",
+            ["ffmpeg", "-hide_banner", "-v", "error", "-noautorotate", "-i", str(src), "-map", "0:v:0", "-an",
              "-vf", ",".join(filters), "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
             stdout=subprocess.PIPE, bufsize=width * height * 3 * 2,
         )

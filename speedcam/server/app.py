@@ -61,9 +61,24 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
             raise HTTPException(404, f"project {pid} not found")
 
     def _project(pid: str) -> dict:
-        _dir(pid)
+        d = _dir(pid)
         data = store.load(pid)
         cfg = ProjectConfig.model_validate(data["config"])
+        if not data.get("stored_orientation") and Path(cfg.source).is_file():
+            # Made before rotated clips were handled: its proxy may have been turned upright by
+            # ffmpeg while calibration and analysis used the stored frames. Re-probe; if the clip
+            # is flagged as rotated, rebuild the proxy as stored and show it with the view rotation
+            # (tracks and calibration are in stored pixels already, so nothing else changes).
+            from ..timing import probe
+
+            info = probe(cfg.source)
+            if info.display_rotation and cfg.rotation == 0:
+                cfg.rotation = info.display_rotation
+            store.save_config(pid, cfg, info=info.to_dict(), stored_orientation=True)
+            if info.display_rotation and (d / "proxy.mp4").exists():
+                (d / "proxy.mp4").unlink()
+                jobs.submit(pid, "proxy", d)
+            data = store.load(pid)
         data["status"] = store.status(pid)
         data["source_exists"] = Path(cfg.source).is_file()
         data["jobs"] = [j.public() for j in jobs.active_for(pid)]

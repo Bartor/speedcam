@@ -102,6 +102,11 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    straight away, with nothing to re-run. A rendered MP4 is rotated as it was at
    render time (90°/270° gives a portrait video; with the side panel, widen the
    panel or put it beside the video, since its text scales to the panel's width).
+   **Clips stored rotated** (a "display rotation" flag, e.g. DJI vertical shooting:
+   3384×6016 stored, shown 6016×3384) are always analysed as stored, and the view
+   rotation is set from the flag, so they show upright. The proxy and the render
+   ignore the flag too, so picture and overlay always line up. Projects made before
+   this rebuild their proxy once when opened, with nothing to re-analyse.
 2. **Calibrate:** choose a reference frame. For any view that isn't straight down,
    use **Polygon**: click 4+ flat ground points, then type measured sides and
    diagonals. A polygon with N corners needs 2N−3 distances to fix its shape (a

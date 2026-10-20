@@ -456,3 +456,34 @@ def test_truncated_entry_boxes_are_trimmed():
     assert boxes(np.full_like(t, 4.5)) == slice(0, len(t))
     approaching = boxes(2.2 * 1.3 ** t)  # oblique view, box growing 30 %/s (0447): kept
     assert approaching.start <= 1 and approaching.stop == len(t)
+
+
+def test_rotated_clip_keeps_stored_orientation(tmp_path):
+    """A clip flagged to be shown rotated (DJI vertical shooting): probe reports the rotation, and
+    the proxy keeps the stored frames' orientation, like the analysis does."""
+    import shutil
+    import subprocess
+
+    from speedcam.timing import probe
+    from speedcam.video import build_proxy
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    plain, rotated = tmp_path / "plain.mp4", tmp_path / "rotated.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x640:rate=10", "-t", "1",
+                    "-pix_fmt", "yuv420p", str(plain)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-display_rotation", "-90", "-i", str(plain), "-c", "copy", str(rotated)],
+                   check=True)
+    info = probe(rotated)
+    assert (info.width, info.height, info.display_rotation) == (320, 640, 90)
+    assert probe(plain).display_rotation == 0
+    proxy = tmp_path / "proxy.mp4"
+    build_proxy(rotated, proxy, info.nb_frames, height=160)
+    p = probe(proxy)
+    assert (p.width, p.height) == (160, 320)  # still portrait, short side 160
+    import av
+
+    with av.open(str(proxy)) as c:  # no rotation flag left for a browser to apply
+        assert not any(sd.type.name == "DISPLAYMATRIX" for sd in getattr(c.streams.video[0], "side_data", []) or [])
+    assert subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream_side_data", "-of", "csv=p=0", str(proxy)],
+                          capture_output=True, text=True).stdout.strip() == ""

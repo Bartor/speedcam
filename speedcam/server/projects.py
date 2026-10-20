@@ -62,9 +62,11 @@ class ProjectStore:
         pid = f"{slug}-{uuid.uuid4().hex[:6]}"
         d = self.root / pid
         d.mkdir(parents=True)
-        cfg = ProjectConfig(source=str(src), capture_fps=None)
+        # a clip flagged to be shown rotated (e.g. DJI vertical shooting) starts with that view
+        # rotation; the frames themselves are used as stored
+        cfg = ProjectConfig(source=str(src), capture_fps=None, rotation=info.display_rotation)
         data = {"id": pid, "name": name or src.name, "created": time.time(),
-                "info": info.to_dict(), "config": cfg.model_dump(mode="json")}
+                "info": info.to_dict(), "config": cfg.model_dump(mode="json"), "stored_orientation": True}
         self._write(pid, data)
         self.refresh(pid, opened=time.time(), last_screen="import")
         return data

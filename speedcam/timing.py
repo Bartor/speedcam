@@ -34,6 +34,9 @@ class VideoInfo:
     slowmo_suspect: bool
     warnings: list[str] = field(default_factory=list)
     tags: dict = field(default_factory=dict)
+    # clockwise degrees a player turns the stored frames to show them upright (display-matrix
+    # side data, e.g. DJI vertical shooting). Analysis always works on the stored frames.
+    display_rotation: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,12 +111,17 @@ def probe(path: str | Path) -> VideoInfo:
     if bit_depth > 8:
         warnings.append(f"{bit_depth}-bit source ({pix_fmt}); a browser proxy will be generated for scrubbing.")
 
+    rot = next((sd.get("rotation") for sd in s.get("side_data_list", []) if "rotation" in sd), None)
+    if rot is None and "rotate" in s.get("tags", {}):  # older muxers: a "rotate" tag, clockwise
+        rot = -int(s["tags"]["rotate"])
+    display_rotation = int(round(-float(rot or 0) / 90)) * 90 % 360  # side data is counter-clockwise
+
     return VideoInfo(
         path=path, width=int(s["width"]), height=int(s["height"]), container_fps=fps,
         nb_frames=nb, duration_s=duration, codec=s.get("codec_name", ""), pix_fmt=pix_fmt,
         bit_depth=bit_depth, color_transfer=s.get("color_transfer", ""), is_dji=is_dji,
         srt_fps=srt_fps, suggested_capture_fps=suggested, slowmo_suspect=slowmo,
-        warnings=warnings, tags=tags,
+        warnings=warnings, tags=tags, display_rotation=display_rotation,
     )
 
 
