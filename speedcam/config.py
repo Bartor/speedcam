@@ -276,6 +276,9 @@ class RenderSettings(BaseModel):
     quality: int = 20
     trail_s: float = 1.0
     label_hold_s: float = 2.5  # how long a vehicle keeps its "max" label after finishing
+    # where speed (and violation) labels go around a vehicle's box, as seen in the output. Pick
+    # the side away from neighbouring lanes and lines: e.g. left/right when traffic runs across
+    label_position: Literal["above", "below", "left", "right"] = "above"
     speed_limit_kmh: float = 50.0
     # presentation (social media): side panel listing every vehicle's max speed as it finishes
     panel: Literal["none", "right", "left"] = "right"

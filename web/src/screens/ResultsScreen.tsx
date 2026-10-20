@@ -49,7 +49,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
     speed_limit_kmh: rs.speed_limit_kmh,
     panel: rs.panel ?? "right", panel_layout: rs.panel_layout ?? "overlay", panel_sort: rs.panel_sort ?? "latest",
     panel_rows: rs.panel_rows ?? 7, title: rs.title ?? "", subtitle: rs.subtitle ?? "", footer: rs.footer ?? "",
-    show_hud: !!rs.show_hud, show_margin: rs.show_margin ?? true,
+    show_hud: !!rs.show_hud, show_margin: rs.show_margin ?? true, label_position: rs.label_position ?? "above",
     scale: rs.scale === 0.5 && project.info.height > 1080 ? +(1080 / project.info.height).toFixed(4) : rs.scale,
   });
 
@@ -110,7 +110,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         output_fps: rset.output_fps === "" ? null : +rset.output_fps, lut: rset.lut || null,
         panel: rset.panel, panel_layout: rset.panel_layout, panel_sort: rset.panel_sort, panel_rows: +rset.panel_rows,
         title: rset.title, subtitle: rset.subtitle, footer: rset.footer, show_hud: rset.show_hud,
-        show_margin: rset.show_margin,
+        show_margin: rset.show_margin, label_position: rset.label_position,
       };
       setRenderJob((await api.render(project.id, body)).id);
     } catch (e) { setErr(String(e)); }
@@ -305,6 +305,11 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             <input type="number" step="any" value={rset.scale} onChange={(e) => setRset({ ...rset, scale: e.target.value })} />
             <label>Speed limit (colour)</label>
             <input type="number" value={rset.speed_limit_kmh} onChange={(e) => setRset({ ...rset, speed_limit_kmh: e.target.value })} />
+            <label title="Side of each vehicle where its speed label goes in the video. Pick the side away from neighbouring lanes and lines, e.g. left or right when traffic runs across the picture.">Speed labels</label>
+            <select value={rset.label_position} onChange={(e) => setRset({ ...rset, label_position: e.target.value })}>
+              <option value="above">above the vehicle</option><option value="below">below the vehicle</option>
+              <option value="left">left of the vehicle</option><option value="right">right of the vehicle</option>
+            </select>
             <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
             <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
           </div>

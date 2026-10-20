@@ -188,7 +188,8 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    vehicles with their max and average speeds, latest or fastest first. Stop lines
    and lights are drawn in the phase's colour, and violating vehicles get a red box
    and a RED LIGHT / SOLID LINE pill. A footer is
-   optional. Text uses Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any
+   optional. **Speed labels** go above, below, left or right of each vehicle (as seen
+   in the output): pick the side away from neighbouring lanes and lines. Text uses Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any
    `.ttf` set in `render.font`.
 
 The API lives under `/api` (OpenAPI at `/docs`). It covers projects, frames,

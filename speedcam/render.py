@@ -438,6 +438,25 @@ class Overlay:
         layer, (w, h) = self.pills.make(big, small, fill, ink, opacity)
         _blend(frame, int(x - (w / 2 if center else 0)), int(y - h), layer)
 
+    def _labels(self, frame, pts, items: list[tuple]) -> None:
+        """Pills (big, small, fill, ink) beside a vehicle's box (display px), on the side set by
+        render.label_position: stacked away from the box above/below it, top to bottom beside it."""
+        pos = self.rs.label_position
+        g, gap = 6 * self.k, 4 * self.k
+        x0, y0 = pts.min(0)
+        x1, y1 = pts.max(0)
+        sizes = [self.pills.make(*it)[1] for it in items]
+        if pos in ("above", "below"):
+            y = y0 - g if pos == "above" else y1 + g
+            for it, (w, h) in zip(items, sizes):
+                self._pill(frame, (x0 + x1) / 2, y if pos == "above" else y + h, *it, center=True)
+                y = y - h - gap if pos == "above" else y + h + gap
+        else:
+            top = (y0 + y1) / 2 - (sum(h for _, h in sizes) + gap * (len(items) - 1)) / 2
+            for it, (w, h) in zip(items, sizes):
+                self._pill(frame, x0 - g - w if pos == "left" else x1 + g, top + h, *it)
+                top += h + gap
+
     def _dashed(self, frame, pts, color, width, on=5, period=8) -> None:
         p = pts.astype(np.int32)
         for a in range(0, len(p) - 1, period):
@@ -568,15 +587,10 @@ class Overlay:
                     cv2.polylines(frame, [trail], False, bgr(color), self.lw, cv2.LINE_AA)
             if ev:  # a violation: box in the violation colour from then on
                 cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(VIOLATION), self.lw + 1, cv2.LINE_AA)
-            y = pts[:, 1].min() - 6 * self.k
-            if label:
-                big, small, fill, ink = label
-                self._pill(frame, pts[:, 0].mean(), y, big, small, fill, ink, center=True)
-                y -= self.pills.make(big, small, fill, ink)[1][1] + 4 * self.k
-            for e in ev:
-                if t - e["t"] <= self.rs.label_hold_s:
-                    self._pill(frame, pts[:, 0].mean(), y, e["big"], e["small"], VIOLATION, WHITE, center=True)
-                    y -= self.pills.make(e["big"], e["small"], VIOLATION, WHITE)[1][1] + 4 * self.k
+            items = ([label] if label else []) + [(e["big"], e["small"], VIOLATION, WHITE) for e in ev
+                                                  if t - e["t"] <= self.rs.label_hold_s]
+            if items:
+                self._labels(frame, pts, items)
 
         if self.rs.show_hud:
             self._pill(frame, 12 * self.k, 44 * self.k, f"{t:.2f} s", f"frame {n} · {self.fps:g} fps", INK, WHITE, 0.7)
