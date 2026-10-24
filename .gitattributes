@@ -1,3 +1,7 @@
 *.sh text eol=lf
 *.cmd text eol=crlf
 *.py text eol=lf
+
+# not part of the release zip (git archive)
+.claude export-ignore
+.github export-ignore
