@@ -350,16 +350,24 @@ def _speed_at(r, t: float, fps: float) -> Optional[float]:
 
 
 ASPECT = 2.2  # length / width of a typical car, for boxes seen near 45 degrees
+# typical widths (m) by class: the outline of a vehicle in an axis-aligned box is built on them
+WIDTH_M = {"car": 1.8, "truck": 2.5, "bus": 2.55, "motorcycle": 0.8}
 
 
-def footprint(corners: np.ndarray, heading: np.ndarray) -> np.ndarray:
+def footprint(corners: np.ndarray, heading: np.ndarray, width_px: Optional[float] = None) -> np.ndarray:
     """The vehicle's outline (4 corners, px) from its detection box and direction of travel.
 
     An oriented box (top-down model) is the outline already. An axis-aligned box around a vehicle
     driving diagonally is much bigger than the vehicle: its corners stick out over neighbouring
-    lanes and lines. The vehicle is then the rectangle along `heading` whose axis-aligned bounds
-    are that box: W = L|cos| + w|sin|, H = L|sin| + w|cos|, solved for length L and width w
-    (near 45 degrees that is singular, and a typical aspect ratio is used instead)."""
+    lanes and lines. The vehicle is then a rectangle along `heading` inside that box.
+
+    With `width_px` (the class's typical width at that spot) the width is that, and the length
+    follows from the box's extent along the heading, W|cos| + H|sin| = L + 2w|sin cos|: no
+    division, so it holds at any angle. Without it, both are solved from W = L|cos| + w|sin|,
+    H = L|sin| + w|cos|, which divides by cos² − sin²: a few px of box or a few degrees of
+    heading change the width a lot away from 0 and 90 degrees (on 0491, at 30 degrees, a 1.8 m
+    wide car came out 0.5 m wide and its wheels on a solid line weren't seen); near 45 degrees a
+    typical aspect ratio is used instead."""
     x0, y0 = corners.min(0)
     x1, y1 = corners.max(0)
     W, H = x1 - x0, y1 - y0
@@ -369,8 +377,14 @@ def footprint(corners: np.ndarray, heading: np.ndarray) -> np.ndarray:
         return corners
     h = heading / n
     c, s = abs(h[0]), abs(h[1])
-    det = c * c - s * s
     L = w = -1.0
+    if width_px:
+        w = min(float(width_px), W * s + H * c)  # never wider than the box across the heading
+        L = min(max(W * c + H * s - 2 * w * s * c, 1.2 * w), W + H)
+        m = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+        nrm = np.array([-h[1], h[0]])
+        return np.array([m + a * L / 2 * h + b * w / 2 * nrm for a, b in ((1, 1), (1, -1), (-1, -1), (-1, 1))])
+    det = c * c - s * s
     if abs(det) > 0.3:
         L, w = (c * W - s * H) / det, (c * H - s * W) / det
     if not (0 < w <= L):
@@ -382,12 +396,22 @@ def footprint(corners: np.ndarray, heading: np.ndarray) -> np.ndarray:
 
 
 def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P: np.ndarray,
-                line: np.ndarray, min_px: float) -> list[tuple[float, float, float]]:
-    """Time spans (t0, t1, max px over) when a corner of the vehicle's box is over the line, on
-    the far side from its centre, by at least min_px."""
+                line: np.ndarray, min_px: float, width_px: Optional[float] = None,
+                min_s: float = 0.5) -> tuple[list[tuple[float, float, float]], tuple[float, float]]:
+    """Time spans (t0, t1, max px over) when a corner of the vehicle's outline is over the line, on
+    the far side from its centre, by at least min_px; and the closest it stayed: (px, t) such that
+    it was over by at least px for min_s from t on (0 if never), to show near misses.
+
+    Only the detections of the measured track count: the ones the speed analysis trimmed at its
+    ends are vehicles cut off by the frame edge, whose box centre isn't the vehicle's (on 0491
+    every car entering the picture looked 0.6-0.8 m over a line it never touched)."""
     if boxes is None:
-        return []
+        return [], (0.0, 0.0)
     bt, corners = boxes
+    keep = (bt >= t[0] - 1e-6) & (bt <= t[-1] + 1e-6)
+    bt, corners = bt[keep], corners[keep]
+    if not len(bt):
+        return [], (0.0, 0.0)
     centre = np.column_stack([np.interp(bt, t, P[:, 0]), np.interp(bt, t, P[:, 1])])
     # direction of travel at each detection, over +-0.25 s (the overall one when stopped)
     tb, ta = np.clip(bt + 0.25, t[0], t[-1]), np.clip(bt - 0.25, t[0], t[-1])
@@ -398,9 +422,18 @@ def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P
     dc, beside_c = signed_distance(centre, line)
     over = np.zeros(len(bt))
     for k in range(len(bt)):
-        dk, bk = signed_distance(footprint(corners[k], head[k]), line)
+        dk, bk = signed_distance(footprint(corners[k], head[k], width_px), line)
         if bk.any() or beside_c[k]:
             over[k] = max(0.0, float((-(np.sign(dc[k]) or 1.0) * dk).max()))
+    closest = (0.0, 0.0)
+    j = 0
+    for k in range(len(bt)):  # windows of min_s: the least it was over within each
+        while bt[k] - bt[j] > min_s:
+            j += 1
+        if bt[k] - bt[j] >= 0.9 * min_s:  # (detections are frames apart, so not exactly min_s)
+            low = float(over[j:k + 1].min())
+            if low > closest[0]:
+                closest = (low, float(bt[j]))
     on = over >= min_px
     spans, k = [], 0
     while k < len(on):
@@ -412,7 +445,7 @@ def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P
             j += 1
         spans.append((float(bt[k]), float(bt[j] + (bt[1] - bt[0] if len(bt) > 1 else 0)), float(over[k:j + 1].max())))
         k = j + 1
-    return spans
+    return spans, closest
 
 
 def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps: float,
@@ -462,6 +495,9 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
     red_events = dedup
 
     line_events: list[dict] = []
+    # vehicles that got over a solid line but less than overlap_m (or for less than min_duration_s):
+    # shown so the threshold can be judged against what actually happened
+    near: list[dict] = []
     for sl in cal.solid_lines:
         if len(sl.points) < 2:
             continue
@@ -472,7 +508,10 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
             r = renders[tid]
             cross = crossings(t, P, line, hyst)
             # wheels: also spans with any box corner over the line by overlap_m (straddling)
-            spans = _over_spans(boxes.get(tid), t, P, line, vs.overlap_m * ppm) if vs.solid_mode == "wheels" else []
+            spans, closest = (_over_spans(boxes.get(tid), t, P, line, vs.overlap_m * ppm, WIDTH_M.get(r.cls, 1.8) * ppm,
+                                          vs.min_duration_s)
+                              if vs.solid_mode == "wheels" else ([], (0.0, 0.0)))
+            n_before = len(line_events)
 
             def event(t0: float, how: str, span=None) -> dict:
                 return {"type": "solid_line", "name": sl.name, "track_id": int(tid), "class": r.cls,
@@ -493,13 +532,19 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
             for k, s in enumerate(spans):
                 if k not in used and s[1] - s[0] >= vs.min_duration_s:
                     line_events.append(event(s[0], "straddled", s))
+            if len(line_events) == n_before and closest[0] >= 0.02 * ppm:
+                near.append({"name": sl.name, "track_id": int(tid), "class": r.cls, "t_s": round(closest[1], 3),
+                             "over_m": round(closest[0] / ppm, 2), "for_s": vs.min_duration_s})
     line_events.sort(key=lambda e: e["t_s"])
+    near.sort(key=lambda e: -e["over_m"])
 
     return {
         "lights": [{"name": p.name, "source": p.source, "read_share": p.read_share,
                     "phases": runs(p.frames, p.codes, fps)} for p in phases],
         "red_light": red_events,
         "solid_line": line_events,
+        "solid_near": near[:10],
+        "overlap_m": vs.overlap_m if vs.solid_mode == "wheels" else None,
         "n_red_light": sum(1 for e in red_events if e["violation"]),
         "n_solid_line": len(line_events),
         "warnings": warnings,

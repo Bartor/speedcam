@@ -258,8 +258,8 @@ class ViolationSettings(BaseModel):
     hysteresis_m: float = 0.5
     # solid lines: "wheels" = the vehicle touches the line: its outline gets over it by overlap_m
     # for min_duration_s (also any lane change); "centre" = only its centre crossing (lane changes).
-    # The outline is the oriented box, or for an axis-aligned box the rectangle along the
-    # direction of travel that fits it (see violations.footprint). On 0457 (straight down)
+    # The outline is the oriented box, or for an axis-aligned box a rectangle of the class's usual
+    # width along the direction of travel (see violations.footprint). On 0457 (straight down)
     # normally driven vehicles reached 0.29 m over a lane line; on 0492 (oblique) cars queueing
     # along a bike-lane line were 0.36-0.65 m over it
     solid_mode: Literal["centre", "wheels"] = "wheels"

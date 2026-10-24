@@ -183,6 +183,9 @@ export interface SolidLineEvent {
 export interface Violations {
   lights: { name: string; source: "colour" | "manual"; read_share: number | null; phases: Phase[] }[];
   red_light: RedLightEvent[]; solid_line: SolidLineEvent[];
+  /** vehicles over a solid line by less than the threshold: how far they stayed over for min_duration_s */
+  solid_near?: { name: string; track_id: number; class: string; t_s: number; over_m: number; for_s: number }[];
+  overlap_m?: number | null;
   n_red_light: number; n_solid_line: number; warnings: string[];
 }
 export const PHASE_COLORS: Record<string, string> = { red: "#eb4034", amber: "#ffb020", green: "#2ecc71", "not red": "#5b6270", unknown: "#3a3f48" };
@@ -263,7 +266,8 @@ export const api = {
   vehicleLook: (id: string, tid: number) => req<VehicleLook>("GET", `/api/projects/${id}/vehicles/${tid}/look`),
   vehicleThumbUrl: (id: string, tid: number, v = "") => `/api/projects/${id}/vehicles/${tid}/thumb.jpg${v ? `?v=${v}` : ""}`,
   /** one output frame as the render would draw it with these (unsaved) settings */
-  renderPreview: async (id: string, frame: number, settings: Record<string, unknown>, signal?: AbortSignal): Promise<Blob> => {
+  /** null: superseded by a newer request */
+  renderPreview: async (id: string, frame: number, settings: Record<string, unknown>, signal?: AbortSignal): Promise<Blob | null> => {
     const r = await fetch(`/api/projects/${id}/render/preview?frame=${frame}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings), signal,
     });
@@ -272,7 +276,7 @@ export const api = {
       try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail ?? j); } catch { /* not json */ }
       throw new Error(msg);
     }
-    return r.blob();
+    return r.status === 204 ? null : r.blob();
   },
   overlay: (id: string) => fetch(`/api/projects/${id}/overlay`).then((r) => (r.ok ? r.json() : null)),
   results: (id: string) => req<Results>("GET", `/api/projects/${id}/results`),

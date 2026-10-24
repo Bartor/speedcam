@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -644,6 +645,11 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
 
     # -- render preview: one frame exactly as the render draws it -----------------------------
     prep_cache: dict[str, tuple[str, dict]] = {}
+    # one preview at a time per project, and only the newest request is drawn: scrubbing the
+    # timeline sends many, and each one (until the first finished) measured the whole clip again,
+    # which with a render running took minutes
+    preview_locks: dict[str, threading.Lock] = {}
+    preview_latest: dict[str, int] = {}
 
     @app.post("/api/projects/{pid}/render/preview")
     def render_preview(pid: str, frame: int = 0, max_width: int = 1600, body: Optional[dict[str, Any]] = Body(None)):
@@ -659,19 +665,25 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
             cfg.render = cfg.render.model_validate({**cfg.render.model_dump(), **(body or {})})
         except ValueError as e:
             raise HTTPException(422, str(e))
-        lights = d / "lights.npz"
-        key = json.dumps([(d / "tracks.parquet").stat().st_mtime, lights.stat().st_mtime if lights.exists() else None,
-                          cfg.model_dump(mode="json", exclude={"render"})], sort_keys=True, default=str)
-        hit = prep_cache.get(pid)
-        if hit and hit[0] == key:
-            prep = hit[1]
-        else:
-            prep = prepare(cfg, d)
-            prep_cache[pid] = (key, prep)
-        try:
-            img = preview(cfg, prep, frame)
-        except IndexError as e:
-            raise HTTPException(404, str(e))
+        me = preview_latest[pid] = preview_latest.get(pid, 0) + 1
+        with preview_locks.setdefault(pid, threading.Lock()):
+            if preview_latest[pid] != me:
+                return Response(status_code=204)  # a newer frame was asked for meanwhile
+            lights = d / "lights.npz"
+            key = json.dumps([(d / "tracks.parquet").stat().st_mtime, lights.stat().st_mtime if lights.exists() else None,
+                              cfg.model_dump(mode="json", exclude={"render"})], sort_keys=True, default=str)
+            hit = prep_cache.get(pid)
+            if hit and hit[0] == key:
+                prep = hit[1]
+            else:
+                prep = prepare(cfg, d)
+                prep_cache[pid] = (key, prep)
+            if preview_latest[pid] != me:
+                return Response(status_code=204)
+            try:
+                img = preview(cfg, prep, frame)
+            except IndexError as e:
+                raise HTTPException(404, str(e))
         if img.shape[1] > max_width:
             z = max_width / img.shape[1]
             img = cv2.resize(img, None, fx=z, fy=z, interpolation=cv2.INTER_AREA)

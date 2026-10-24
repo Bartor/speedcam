@@ -240,7 +240,8 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
           <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
             onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
             hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
-            solidMode={(project.config.violations as any)?.solid_mode ?? "centre"} />
+            solidMode={(project.config.violations as any)?.solid_mode ?? "wheels"}
+            minDuration={(project.config.violations as any)?.min_duration_s ?? 0.5} />
         )}
         {cands && <SplitsPanel cands={cands} busy={busy} onMerge={merge} onSeek={seekTime} />}
         <MarginPanel project={project} res={res} onProject={onChanged} onRecomputed={gotResults} />

@@ -3,7 +3,7 @@ import Timeline, { Range } from "../components/Timeline";
 import Help from "../components/Help";
 import ProgressBar from "../components/ProgressBar";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
-import { api, Project, Results, rotSize, useJob } from "../api";
+import { api, Project, Results, rotSize, useJob, useVideoFrame } from "../api";
 
 interface Props { project: Project; onChanged: (p: Project) => void }
 
@@ -90,6 +90,7 @@ export default function ExportScreen({ project, onChanged }: Props) {
       setPvBusy(true);
       try {
         const blob = await api.renderPreview(project.id, frame, { ...s, lut: s.lut || null }, ctl.signal);
+        if (!blob) return;  // a newer frame was asked for
         const url = URL.createObjectURL(blob);
         setImg((old) => { if (old) URL.revokeObjectURL(old); return url; });
         setPvErr(null);
@@ -142,7 +143,8 @@ export default function ExportScreen({ project, onChanged }: Props) {
 
   // ---- render job
   const [renderJob, setRenderJob] = useState<string | null>(project.jobs.find((j) => j.kind === "render")?.id ?? null);
-  const rjob = useJob(renderJob, () => {
+  const rjob = useJob(renderJob, (j) => {
+    if (j.status === "done") setView("rendered");
     api.results(project.id).then(setRes).catch(() => {});
     api.project(project.id).then(onChanged).catch(() => {});
   });
@@ -152,6 +154,33 @@ export default function ExportScreen({ project, onChanged }: Props) {
   };
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
+  const [view, setView] = useState<"preview" | "rendered">("preview");
+  const rendered = view === "rendered" && !!res?.render;
+
+  // the rendered video's time <-> frames of the clip: its parts back to back, at playback speed
+  const rm = res?.render;
+  const rParts: Range[] = rm ? ((rm.parts as Range[] | null | undefined) ?? [[0, nb]]) : [];
+  const rRatio = rm ? (rm.playback_speed * (rm.capture_fps || fps)) / rm.output_fps : 1;  // clip frames per video frame
+  const rCounts = rParts.map(([a, b]) => (b > a ? Math.floor((b - a - 1) / rRatio) + 1 : 0));
+  const clipFrameAt = (videoFrame: number) => {
+    let j = videoFrame;
+    for (let k = 0; k < rParts.length; k++) {
+      if (j < rCounts[k]) return rParts[k][0] + Math.round(j * rRatio);
+      j -= rCounts[k];
+    }
+    return rParts.length ? rParts[rParts.length - 1][1] - 1 : 0;
+  };
+  const videoTimeOf = (f: number) => {
+    let before = 0;
+    for (let k = 0; k < rParts.length; k++) {
+      const [a, b] = rParts[k];
+      if (f < b) return (before + Math.max(0, Math.round((f - a) / rRatio)) + 0.5) / rm!.output_fps;  // in a gap: the next part
+      before += rCounts[k];
+    }
+    return (before - 0.5) / rm!.output_fps;
+  };
+  const { frame: vFrame } = useVideoFrame(rendered ? video : null, rm?.output_fps ?? 30);
+  const playhead = rendered ? clipFrameAt(vFrame) : frame ?? 0;
 
   const vehicles = res?.vehicles.map((v) => ({ id: v.track_id, f0: Math.round(v.t_entry_s * fps), f1: Math.round(v.t_exit_s * fps), valid: v.valid }));
   const nViol = res?.violations ? res.violations.red_light.filter((e) => e.violation).length + res.violations.solid_line.length : 0;
@@ -179,38 +208,50 @@ export default function ExportScreen({ project, onChanged }: Props) {
         <div className="export-left">
           <section className="panel">
             <div className="panel-head">
-              <h3>Preview<Help topic="export.preview" /></h3>
-              <span className="muted small">frame {frame ?? "–"} · {frame !== null ? (frame / fps).toFixed(2) : "–"} s · drawn exactly as the render, at up to 1600 px wide</span>
-              <span className="grow" />
-              {pvBusy && <span className="muted small">updating…</span>}
-            </div>
-            <div className={`preview-box${pvBusy ? " busy" : ""}`} style={{ aspectRatio: `${ow} / ${oh}` }}>
-              {img && <img src={img} alt="Render preview" />}
-            </div>
-            {pvErr && <div className="banner warn small">{pvErr}</div>}
-            <Timeline project={project} frame={frame ?? 0} onSeek={setFrame} vehicles={vehicles} verb="Render"
-              ranges={shownRanges} onRanges={(r) => { setPreset(r ? "custom" : "whole"); setS((o) => ({ ...o, ranges: r, only_parts: false })); }} />
-            <p className="footnote">Click or drag on the timeline to preview another frame. Drag on the bottom lane to choose what's rendered:
-              over blue to cut out, elsewhere to add; I / O set in and out points.</p>
-          </section>
-
-          {res?.render && (
-            <section className="panel">
-              <div className="panel-head">
-                <h3>Rendered video</h3>
-                <span className="tag">{res.render.width}×{res.render.height} · {+res.render.output_fps.toFixed(2)} fps{res.render.playback_speed !== 1 ? ` · ${res.render.playback_speed}×` : ""}</span>
+              <div className="seg-ctl" role="tablist" aria-label="Show">
+                <button className={!rendered ? "active" : ""} onClick={() => setView("preview")} title="Any frame, drawn as the render will draw it">Preview</button>
+                <button className={rendered ? "active" : ""} disabled={!res?.render} onClick={() => setView("rendered")}
+                  title={res?.render ? "The last rendered video" : "Nothing rendered yet"}>Rendered</button>
+              </div>
+              <Help topic="export.preview" />
+              {rendered && rm ? <>
+                <span className="tag">{rm.width}×{rm.height} · {+rm.output_fps.toFixed(2)} fps{rm.playback_speed !== 1 ? ` · ${rm.playback_speed}×` : ""}</span>
+                <span className="muted small">the last render, made with the settings it had then</span>
                 <span className="grow" />
                 <a className="button" href={api.fileUrl(project.id, "render.mp4")}><span className="dl-ico">↓</span>render.mp4</a>
+              </> : <>
+                <span className="muted small">frame {frame ?? "–"} · {frame !== null ? (frame / fps).toFixed(2) : "–"} s · as the render will draw it</span>
+                <span className="grow" />
+                {pvBusy && <span className="muted small">{img ? "updating…" : ""}</span>}
+              </>}
+            </div>
+            {rendered && rm ? (
+              <>
+                <div ref={setWrapEl} className="video-wrap preview-box" style={{ aspectRatio: `${rm.width ?? ow} / ${rm.height ?? oh}` }}>
+                  <RotatedVideo rotation={0} videoRef={setVideo} muted playsInline preload="metadata"
+                    onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }}
+                    src={`${api.fileUrl(project.id, "render.mp4")}?v=${rm.file}${rjob.end?.id ?? ""}`} />
+                </div>
+                <VideoControls video={video} fullscreenEl={wrapEl} containerFps={rm.output_fps}
+                  realTime={(tv) => tv * rm.playback_speed} />
+              </>
+            ) : (
+              <div className={`preview-box${pvBusy ? " busy" : ""}`} style={{ aspectRatio: `${ow} / ${oh}` }}>
+                {img && <img src={img} alt="Render preview" />}
+                {!img && <div className="preview-wait">{pvErr ? "" : pvBusy || frame === null
+                  ? "Preparing the preview: the clip's speeds and violations are worked out once (about 15 s for a 4K clip, longer while a render runs)…"
+                  : ""}</div>}
               </div>
-              <div ref={setWrapEl} className="video-wrap">
-                <RotatedVideo rotation={0} videoRef={setVideo} muted playsInline preload="metadata"
-                  onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }}
-                  src={`${api.fileUrl(project.id, "render.mp4")}?v=${res.render.file}${rjob.end?.id ?? ""}`} />
-              </div>
-              <VideoControls video={video} seekBar fullscreenEl={wrapEl} containerFps={res.render.output_fps}
-                realTime={(t) => t * res.render!.playback_speed} keys={false} />
-            </section>
-          )}
+            )}
+            {pvErr && !rendered && <div className="banner warn small">{pvErr}</div>}
+            <Timeline project={project} frame={playhead} vehicles={vehicles} verb="Render"
+              onSeek={(f) => { if (rendered && video) { video.pause(); video.currentTime = videoTimeOf(f); } else setFrame(f); }}
+              ranges={shownRanges} onRanges={(r) => { setPreset(r ? "custom" : "whole"); setS((o) => ({ ...o, ranges: r, only_parts: false })); }} />
+            <p className="footnote">{rendered
+              ? "The playhead follows the rendered video through the parts it covers; click the timeline to jump to that moment in it."
+              : "Click or drag on the timeline to preview another frame."} Drag on the bottom lane to choose what's rendered:
+              over blue to cut out, elsewhere to add; I / O set in and out points.</p>
+          </section>
         </div>
 
         <aside className="export-side">

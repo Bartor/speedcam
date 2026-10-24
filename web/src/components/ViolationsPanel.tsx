@@ -10,12 +10,13 @@ interface Props {
   onSeek: (t: number) => void;
   hasSolid: boolean;
   solidMode: string;
+  minDuration?: number;
 }
 
 type Row = (RedLightEvent | SolidLineEvent) & { verdict: "violation" | "ok" | "unknown" };
 
 /** Red-light running and solid-line crossings: light phase timelines and the list of events. */
-export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, hasSolid, solidMode }: Props) {
+export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, hasSolid, solidMode, minDuration = 0.5 }: Props) {
   const v = res.violations!;
   const [all, setAll] = useState(false);
   const duration = res.nb_frames / res.capture_fps;
@@ -88,8 +89,23 @@ export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, h
           </table>
         </div>
       )}
+      {(v.solid_near ?? []).length > 0 && (
+        <div className="near-misses">
+          <div className="subhead">Over a solid line, but under the threshold</div>
+          {v.solid_near!.map((e) => (
+            <button key={`${e.track_id}-${e.name}`} className="near-row small" onClick={() => onPick(e.track_id, e.t_s)}>
+              <span>#{e.track_id} {e.class} · {e.name}</span>
+              <span className="muted">{e.over_m.toFixed(2)} m over for {e.for_s} s, at {e.t_s.toFixed(1)} s</span>
+            </button>
+          ))}
+          <p className="footnote">Reported from {v.overlap_m ?? "–"} m over for {minDuration} s (Calibrate → Solid lines). The outline comes from the
+            detection box and the class's usual width, so expect ± 0.1-0.2 m; in a view at an angle the box also holds the vehicle's side.</p>
+        </div>
+      )}
       <p className="footnote">Red light: the moment the front of the vehicle's box reached the stop line, and the light's phase then.
-        Solid line: the vehicle's centre {solidMode === "wheels" ? "or any part of its box " : ""}crossed the line, at least 0.5 m clear on both sides. Click a row to watch it.</p>
+        Solid line: {solidMode === "wheels"
+          ? `the vehicle's outline got over the line by ${v.overlap_m ?? 0.3} m for ${minDuration} s, or its centre crossed it (a lane change, at least 0.5 m clear on both sides)`
+          : "its centre crossed the line, at least 0.5 m clear on both sides"}. Click a row to watch it.</p>
     </section>
   );
 }

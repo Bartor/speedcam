@@ -169,6 +169,24 @@ def test_footprint_of_axis_aligned_box_on_a_diagonal():
     assert violations.footprint(car, h) is car  # an oriented box is kept
 
 
+def test_footprint_on_the_class_width_survives_a_noisy_box():
+    """The solved width divides by cos² - sin²: at 30 degrees a box a few % off (or a heading a
+    few degrees off) made a 1.8 m car 0.5 m wide on 0491. On the class width it stays a car."""
+    L, w, a = 4.5, 1.8, np.radians(30)
+    h = np.array([np.cos(a), np.sin(a)])
+    W, H = L * np.cos(a) + w * np.sin(a), L * np.sin(a) + w * np.cos(a)
+    noisy = np.array([[0, 0], [W * 0.97, 0], [W * 0.97, H * 1.06], [0, H * 1.06]])
+    solved = violations.footprint(noisy, h)
+    sides = sorted(np.linalg.norm(solved - np.roll(solved, 1, axis=0), axis=1))
+    assert abs(sides[0] - w) > 0.25 * w  # the unstable solve: a 3-6 % box error, a 30 % width error
+    fp = violations.footprint(noisy, h, width_px=w)
+    sides = sorted(np.linalg.norm(fp - np.roll(fp, 1, axis=0), axis=1))
+    assert sides[0] == pytest.approx(w) and sides[-1] == pytest.approx(L, rel=0.08)
+    exact = np.array([[0, 0], [W, 0], [W, H], [0, H]])
+    sides = sorted(np.linalg.norm(violations.footprint(exact, h, w) - np.roll(violations.footprint(exact, h, w), 1, axis=0), axis=1))
+    assert sides[-1] == pytest.approx(L)
+
+
 def test_diagonal_car_beside_a_line_isnt_touching_it():
     """Axis-aligned boxes of a car driving diagonally next to a line overlap it; the car doesn't."""
     line = SolidLine(name="Edge", points=[(0, 60), (2000, 1215)])  # 30 degrees, like the car
@@ -184,7 +202,7 @@ def test_diagonal_car_beside_a_line_isnt_touching_it():
             x0, y0 = car.min(0)
             x1, y1 = car.max(0)
             box = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]  # what a COCO-style detector gives
-            out.append({"frame": f, "track_id": tid, "cls": 2, "conf": 0.9, "rx": c[0], "ry": c[1],
+            out.append({"frame": f, "track_id": tid, "cls": 0, "conf": 0.9, "rx": c[0], "ry": c[1],
                         "x_m": c[0] * M_PER_PX, "y_m": c[1] * M_PER_PX,
                         **{f"c{k}{a}": box[k][j] for k in range(4) for j, a in enumerate("xy")}})
         return out
