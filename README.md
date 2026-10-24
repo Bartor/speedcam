@@ -343,3 +343,31 @@ camera sway and per-frame position jitter. It stores the clip as 30 fps
   facing the camera, so colour reading is only tested on synthetic images and on
   a typed-phase setup over real tracks.
 - Non-goals for v1: real-time processing, live feed, oblique angles, multi-drone fusion.
+
+## License
+
+Copyright (C) 2026 Bartosz Barnaba Rajczyk
+
+speedcam is free software: you can redistribute it and/or modify it under the terms of
+the GNU Affero General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version. It is
+distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+[LICENSE](LICENSE) for the full text.
+
+In short: use it, change it and share it freely. If you distribute it, or modify it and
+run it as a service other people use over a network, make your source code available
+under the same license.
+
+Third-party parts keep their own licenses:
+
+- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) (detection) and the
+  YOLO weights it downloads: AGPL-3.0. This is why speedcam is AGPL too.
+- PyTorch (BSD-3-Clause), OpenCV (Apache-2.0), PyAV and the other Python dependencies:
+  see each package.
+- ffmpeg is called as a separate program (LGPL/GPL, depending on your build).
+- The VisDrone-trained weights are made from the
+  [VisDrone2019-DET](https://github.com/VisDrone/VisDrone-Dataset) dataset, which is
+  for academic use. Check its terms before sharing weights trained on it.
+  `tools/train_visdrone.py` lets anyone train their own.
+

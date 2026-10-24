@@ -7,6 +7,14 @@ name = "speedcam"
 version = "0.1.0"
 description = "Vehicle speed, red-light and solid-line checks from drone and CCTV footage, analysed locally"
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "Bartosz Barnaba Rajczyk"}]
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
 dependencies = [
     "ultralytics>=8.3",
     "supervision>=0.25,<0.31",
@@ -22,6 +30,10 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Bartor/speedcam"
+Issues = "https://github.com/Bartor/speedcam/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
