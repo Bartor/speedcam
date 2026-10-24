@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
-from . import calibration
+from . import calibration, violations
 from .config import ProjectConfig, RenderSettings
 from .flow import reference_positions
 from .pipeline import Reporter, find_violations, margin_of_error, resolve_capture_fps
@@ -47,13 +47,19 @@ def violation_events(viol: Optional[dict]) -> dict[int, list[dict]]:
         if e["violation"]:
             since = e.get("phase_for_s")
             out.setdefault(e["track_id"], []).append({
-                "t": e["t_s"], "big": "RED LIGHT", "line": e["name"],
+                "t": e["t_s"], "until": e["t_s"], "big": "RED LIGHT", "line": e["name"],
                 "small": e["name"] + (f" · red {since:.1f} s" if since is not None else "")})
     for e in (viol or {}).get("solid_line", []):
         out.setdefault(e["track_id"], []).append({
-            "t": e["t_s"], "big": "SOLID LINE", "line": e["name"],
-            "small": e["name"] + (" · straddling" if e["how"] == "straddled" else "")})
+            "t": e["t_s"], "until": e.get("t_end_s") or e["t_s"], "big": "SOLID LINE", "line": e["name"],
+            "small": e["name"] + (" · on the line" if e["how"] == "straddled" else "")})
     return out
+
+
+def event_showing(e: dict, t: float, hold_s: float) -> bool:
+    """A violation's label is up from the moment it starts, while it lasts (a vehicle on a solid
+    line), and `hold_s` after."""
+    return e["t"] <= t <= max(e.get("until", e["t"]), e["t"]) + hold_s
 
 
 def phase_at(phases: list[dict], t: float) -> str:
@@ -405,6 +411,8 @@ class Overlay:
                  typo: Optional[Typography] = None, viol: Optional[dict] = None):
         self.cfg, self.fps, self.cal, self.renders = cfg, fps, cal, renders
         self.events = violation_events(viol)
+        # nothing measured (tracking only): show every tracked vehicle
+        self.show_all = cfg.render.show_unmeasured or not (cal.path_geoms or cal.line_a_world is not None)
         self.phases = [lt["phases"] for lt in (viol or {}).get("lights", [])]
         self.rs = cfg.render
         self.W, self.H = size
@@ -498,11 +506,11 @@ class Overlay:
         """Solid lines, and red-light setups: lights and stop lines in the colour of the phase."""
         cal = self.cfg.calibration
         hot = {e["line"] for ev in self.events.values() for e in ev
-               if e["big"] == "SOLID LINE" and 0 <= t - e["t"] <= self.rs.label_hold_s}
+               if e["big"] == "SOLID LINE" and event_showing(e, t, 0.5)}
         for sl in cal.solid_lines:
             if len(sl.points) < 2:
                 continue
-            p = transform_points(to_disp, np.array(sl.points, float)).astype(np.int32)
+            p = transform_points(to_disp, violations.solid_curve(sl.points)).astype(np.int32)
             color = VIOLATION if sl.name in hot else (235, 235, 235)
             cv2.polylines(frame, [p], False, (20, 20, 20), self.lw + 3, cv2.LINE_AA)
             cv2.polylines(frame, [p], False, bgr(color), self.lw + 1, cv2.LINE_AA)
@@ -562,7 +570,7 @@ class Overlay:
             r = self.renders.get(int(tid))
             res = r.result if r else None
             ev = [e for e in self.events.get(int(tid), []) if t >= e["t"]]
-            if res is None and not ev and not self.rs.show_unmeasured:
+            if res is None and not ev and not self.show_all:
                 continue  # parked cars, trams, tracks that never cross both lines
             pts = transform_points(to_disp, c)
             color, label = (220, 220, 220), None
@@ -588,7 +596,7 @@ class Overlay:
             if ev:  # a violation: box in the violation colour from then on
                 cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(VIOLATION), self.lw + 1, cv2.LINE_AA)
             items = ([label] if label else []) + [(e["big"], e["small"], VIOLATION, WHITE) for e in ev
-                                                  if t - e["t"] <= self.rs.label_hold_s]
+                                                  if event_showing(e, t, self.rs.label_hold_s)]
             if items:
                 self._labels(frame, pts, items)
 
@@ -605,7 +613,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     rs = cfg.render
     info = probe(cfg.source)
     fps = resolve_capture_fps(cfg, info, reporter)
-    cal = calibration.compute(cfg.calibration, (info.width, info.height))
+    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
     tracks = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
@@ -688,7 +696,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     out = Path(out_dir)
     info = probe(cfg.source)
     fps = resolve_capture_fps(cfg, info, Reporter())
-    cal = calibration.compute(cfg.calibration, (info.width, info.height))
+    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
     tracks = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(tracks))
     tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
@@ -737,7 +745,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
                                        if len(sl.points) >= 2],
                         "phases": viol["lights"][k]["phases"] if k < len(viol.get("lights", [])) else []}
                        for k, s in enumerate(cfg.calibration.red_lights)],
-        "solid_lines": [{"name": s.name, "px": r1(s.points)} for s in cfg.calibration.solid_lines
+        "solid_lines": [{"name": s.name, "px": r1(violations.solid_curve(s.points))} for s in cfg.calibration.solid_lines
                         if len(s.points) >= 2],
         "events": {str(tid): ev for tid, ev in violation_events(viol).items()},
         "label_hold_s": cfg.render.label_hold_s,

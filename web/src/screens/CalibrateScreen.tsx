@@ -454,12 +454,25 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           {solids.length > 0 && (
             <>
               <div className="seg-ctl small">
-                <button className={(vcfg.solid_mode ?? "centre") === "centre" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "centre" })}
-                  title="The vehicle's centre goes from one side to the other: a lane change across the line">Centre crosses</button>
-                <button className={vcfg.solid_mode === "wheels" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "wheels" })}
-                  title="Any part of the vehicle's box gets over the line, also without changing lanes (straddling). Needs straight-down footage, where the box is the vehicle's footprint.">Any part over</button>
+                <button className={(vcfg.solid_mode ?? "wheels") === "wheels" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "wheels" })}
+                  title="Any part of the vehicle gets over the line (driving on it, cutting a corner), and every lane change">Touches the line</button>
+                <button className={vcfg.solid_mode === "centre" ? "active" : ""} onClick={() => setViolationSetting({ solid_mode: "centre" })}
+                  title="Only when the vehicle's centre goes from one side to the other: a lane change across the line">Crosses it (lane change)</button>
               </div>
-              <p className="muted small">A crossing only counts once the vehicle is {vcfg.hysteresis_m ?? 0.5} m clear of the line on both sides, so tracking wobble along a line isn't reported.</p>
+              {(vcfg.solid_mode ?? "wheels") === "wheels" && (
+                <div className="item-row small">
+                  <span title="How far the vehicle's outline must get over the line. Lower catches lighter touches but also tracking noise (normal driving reached 0.29 m on a straight-down clip).">Over by ≥</span>
+                  <input key={`o${vcfg.overlap_m}`} type="number" step="0.05" min={0.05} className="narrow" defaultValue={vcfg.overlap_m ?? 0.3}
+                    onBlur={(e) => setViolationSetting({ overlap_m: Math.max(0.05, parseFloat(e.target.value) || 0.3) })} />
+                  <span className="muted">m for ≥</span>
+                  <input key={`d${vcfg.min_duration_s}`} type="number" step="0.1" min={0} className="narrow" defaultValue={vcfg.min_duration_s ?? 0.5}
+                    onBlur={(e) => setViolationSetting({ min_duration_s: Math.max(0, parseFloat(e.target.value) || 0) })} />
+                  <span className="muted">s</span>
+                </div>
+              )}
+              <p className="muted small">{(vcfg.solid_mode ?? "wheels") === "wheels"
+                ? "The vehicle's outline comes from its box and its direction of travel (a box around a car driving diagonally is much bigger than the car). In an oblique view the outline includes the car's height, so set the margin a little higher there. "
+                : ""}A lane change only counts once the vehicle is {vcfg.hysteresis_m ?? 0.5} m clear of the line on both sides, so tracking wobble along a line isn't reported. Changes apply after Recompute.</p>
             </>
           )}
         </section>
@@ -484,8 +497,9 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
 
         </div>
         <div className="cal-foot">
-          <button className="primary wide lg" disabled={!ready} onClick={onNext}>Continue to processing →</button>
-          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration does not fit its check distances (see above)." : "Needs a calibration (polygon, rectangle, distances or control points) and a path, both lines, a stop line or a solid line."}</p>}
+          <button className="primary wide lg" onClick={onNext}>Continue to processing →</button>
+          {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration doesn't fit its check distances (see above), so nothing would be measured: " : result.error ? "No calibration yet, so nothing will be measured: " : "Nothing to measure yet (no path, lines A/B, stop line or solid line): "}
+            the analysis only detects and tracks the vehicles. Calibrate and draw them later, then press Recompute on the results.</p>}
         </div>
       </aside>
     </div>

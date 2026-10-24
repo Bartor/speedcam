@@ -153,16 +153,12 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    intervals instead. A vehicle runs the red when the front of its box reaches a
    stop line, in the counted direction (both, or along/against the arrow), while
    the phase is red. Options: amber counts as red, and a grace period after the
-   change. **Solid line** draws a road marking: every vehicle crossing it anywhere
-   along it is reported. *Centre crosses* (default) catches lane changes; *Any part
-   over* also catches straddling, with a box at least 0.5 m over for 0.5 s (needs
-   straight-down footage, where the box is the vehicle's footprint). On 0457,
-   normally driven vehicles' boxes reached 0.29 m over the lane line. A crossing
-   only counts once the vehicle is 0.5 m clear on both sides, so tracking wobble
-   along a line isn't reported. These checks use the stored tracks: draw or change
+   change. **Solid line** draws a road marking (a smooth curve through the clicked points, like a path). By default (*Touches the line*) a vehicle is reported when its outline gets over the line by 0.3 m for 0.5 s, and on every lane change; *Crosses it* reports lane changes only. The outline is the oriented box, or for an axis-aligned box the rectangle along the direction of travel that fits it (a box around a car driving diagonally is much bigger than the car). The video marks the vehicle and flashes the line for as long as it's on it. Known limit: in an oblique view the box includes the car's roof and side, so a car with its wheels on the line can read a few tens of cm clear (seen on 0492); lower the margin there. A lane change only counts once the vehicle is 0.5 m clear on both sides, so tracking wobble along a line isn't reported. These checks use the stored tracks: draw or change
    them after the analysis and press **Recompute**. Lights added or moved since then
    are read from the video (decode only, no GPU). A project can have only
    violation checks, without lines A/B or paths.
+   **Nothing set up is fine too:** without a calibration, or with nothing to measure, the
+   analysis only detects and tracks; calibrate and draw lines later and press Recompute.
 3. **Process:** choose **Camera: Hovering** (stabilize every frame) or **Still**
    (skip stabilization, faster). A preview run with stabilization on measures camera
    drift against the reference frame, in px and in cm on the ground, and says whether

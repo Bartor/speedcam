@@ -256,13 +256,14 @@ class ViolationSettings(BaseModel):
     # tracked position wobbles by a few tens of cm, so a vehicle driving along a line doesn't
     # "cross" it back and forth
     hysteresis_m: float = 0.5
-    # solid lines: "centre" = the vehicle's centre crosses (a lane change); "wheels" = any part of
-    # its box gets over the line by overlap_m for min_duration_s (straddling); boxes are only the
-    # vehicle's footprint when filmed straight down. On 0457 (straight down, no lane changes)
-    # boxes of normally driven vehicles reached up to 0.29 m over the lane line, so the default
-    # leaves a margin above that
-    solid_mode: Literal["centre", "wheels"] = "centre"
-    overlap_m: float = 0.5
+    # solid lines: "wheels" = the vehicle touches the line: its outline gets over it by overlap_m
+    # for min_duration_s (also any lane change); "centre" = only its centre crossing (lane changes).
+    # The outline is the oriented box, or for an axis-aligned box the rectangle along the
+    # direction of travel that fits it (see violations.footprint). On 0457 (straight down)
+    # normally driven vehicles reached 0.29 m over a lane line; on 0492 (oblique) cars queueing
+    # along a bike-lane line were 0.36-0.65 m over it
+    solid_mode: Literal["centre", "wheels"] = "wheels"
+    overlap_m: float = 0.3
     min_duration_s: float = 0.5
 
 

@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 import pandas as pd
 
@@ -124,7 +125,7 @@ def test_solid_line_centre_crossing_with_hysteresis():
     lane_change = _rows(1, x, 170 + 60 / (1 + np.exp(-(t - 2) * 4)))  # 1.5 m to the other lane
     along = _rows(2, x, 200 + 8 * np.sin(t * 9))  # rides on the line, +-0.4 m wobble
     past_end = _rows(3, 2200 + 200 * t, 170 + 60 / (1 + np.exp(-(t - 2) * 4)))  # beyond its end
-    v = _run(_cal(solid_lines=[line]), lane_change + along + past_end)
+    v = _run(_cal(solid_lines=[line]), lane_change + along + past_end, solid_mode="centre")
     assert [(e["track_id"], e["how"]) for e in v["solid_line"]] == [(1, "crossed")]
     assert abs(v["solid_line"][0]["t_s"] - 2.0) < 0.1
 
@@ -144,3 +145,53 @@ def test_violations_only_project_needs_no_speed_lines():
     t = np.arange(int(4 * FPS)) / FPS
     v = _run(cal, _rows(1, 200 + 200 * t, 170 + 60 / (1 + np.exp(-(t - 2) * 4))))
     assert len(v["solid_line"]) == 1
+
+
+def test_footprint_of_axis_aligned_box_on_a_diagonal():
+    # a 4.5 x 1.8 m car (px == m here) heading 30 degrees: its axis-aligned box is ~4.8 x 3.8
+    L, w, a = 4.5, 1.8, np.radians(30)
+    h, n = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+    car = np.array([h * L / 2 + n * w / 2, h * L / 2 - n * w / 2, -h * L / 2 - n * w / 2, -h * L / 2 + n * w / 2])
+    x0, y0 = car.min(0)
+    x1, y1 = car.max(0)
+    aabb = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    fp = violations.footprint(aabb, h)
+    sides = sorted(np.linalg.norm(fp - np.roll(fp, 1, axis=0), axis=1))
+    assert sides[0] == pytest.approx(w, abs=0.05) and sides[-1] == pytest.approx(L, abs=0.05)
+    assert np.allclose(sorted(map(tuple, np.round(fp, 3))), sorted(map(tuple, np.round(car, 3))))
+    # near 45 degrees (singular) it falls back to a typical car shape that fits the box
+    b = (L + w) / np.sqrt(2) / 2
+    sq = np.array([[-b, -b], [b, -b], [b, b], [-b, b]])
+    fp45 = violations.footprint(sq, np.array([1.0, 1.0]))
+    assert np.all(fp45.min(0) >= -b - 1e-6) and np.all(fp45.max(0) <= b + 1e-6)
+    sides = sorted(np.linalg.norm(fp45 - np.roll(fp45, 1, axis=0), axis=1))
+    assert sides[-1] / sides[0] == pytest.approx(violations.ASPECT, rel=0.01)
+    assert violations.footprint(car, h) is car  # an oriented box is kept
+
+
+def test_diagonal_car_beside_a_line_isnt_touching_it():
+    """Axis-aligned boxes of a car driving diagonally next to a line overlap it; the car doesn't."""
+    line = SolidLine(name="Edge", points=[(0, 60), (2000, 1215)])  # 30 degrees, like the car
+    t = np.arange(int(4 * FPS)) / FPS
+    d = np.array([np.cos(np.radians(30)), np.sin(np.radians(30))])
+    nrm = np.array([-d[1], d[0]])
+    centre = np.array([200.0, 60 + 200 * np.tan(np.radians(30))]) - nrm * 40 + np.outer(200 * t, d)  # 2 m off the line (1.1 m clear)
+
+    def rows(tid, pts, L=90, W=36):
+        out = []
+        for f, c in enumerate(pts):
+            car = np.array([c + d * L / 2 + nrm * W / 2, c + d * L / 2 - nrm * W / 2, c - d * L / 2 - nrm * W / 2, c - d * L / 2 + nrm * W / 2])
+            x0, y0 = car.min(0)
+            x1, y1 = car.max(0)
+            box = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]  # what a COCO-style detector gives
+            out.append({"frame": f, "track_id": tid, "cls": 2, "conf": 0.9, "rx": c[0], "ry": c[1],
+                        "x_m": c[0] * M_PER_PX, "y_m": c[1] * M_PER_PX,
+                        **{f"c{k}{a}": box[k][j] for k in range(4) for j, a in enumerate("xy")}})
+        return out
+
+    clear = rows(1, centre)
+    on_line = rows(2, centre + nrm * 30)  # centre 0.5 m off: its side is 0.4 m over the line
+    v = _run(_cal(solid_lines=[line]), clear + on_line)
+    got = {e["track_id"]: e for e in v["solid_line"]}
+    assert set(got) == {2} and got[2]["how"] == "straddled"
+    assert got[2]["max_over_m"] == pytest.approx(0.4, abs=0.1) and got[2]["t_end_s"] > got[2]["t_s"] + 3

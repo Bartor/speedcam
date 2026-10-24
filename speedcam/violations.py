@@ -42,6 +42,15 @@ def state_name(code: int) -> str:
 
 
 # -- light colour ---------------------------------------------------------------------------
+def solid_curve(points) -> np.ndarray:
+    """A solid line as drawn: a smooth curve through its points (like a path of motion), so a few
+    clicks follow a bend."""
+    from .path import catmull_rom
+
+    P = np.asarray(points, float)
+    return catmull_rom(P, 30) if len(P) >= 3 else P
+
+
 def light_list(cal: Calibration) -> list[tuple[int, int]]:
     """(setup index, light index) of every light, in a fixed order (columns of the samples)."""
     return [(s, k) for s, r in enumerate(cal.red_lights) for k in range(len(r.lights))]
@@ -340,6 +349,38 @@ def _speed_at(r, t: float, fps: float) -> Optional[float]:
     return None
 
 
+ASPECT = 2.2  # length / width of a typical car, for boxes seen near 45 degrees
+
+
+def footprint(corners: np.ndarray, heading: np.ndarray) -> np.ndarray:
+    """The vehicle's outline (4 corners, px) from its detection box and direction of travel.
+
+    An oriented box (top-down model) is the outline already. An axis-aligned box around a vehicle
+    driving diagonally is much bigger than the vehicle: its corners stick out over neighbouring
+    lanes and lines. The vehicle is then the rectangle along `heading` whose axis-aligned bounds
+    are that box: W = L|cos| + w|sin|, H = L|sin| + w|cos|, solved for length L and width w
+    (near 45 degrees that is singular, and a typical aspect ratio is used instead)."""
+    x0, y0 = corners.min(0)
+    x1, y1 = corners.max(0)
+    W, H = x1 - x0, y1 - y0
+    axis_aligned = np.allclose(np.sort(corners[:, 0]), [x0, x0, x1, x1], atol=0.5) and         np.allclose(np.sort(corners[:, 1]), [y0, y0, y1, y1], atol=0.5)
+    n = float(np.linalg.norm(heading))
+    if not axis_aligned or n < 1e-9:
+        return corners
+    h = heading / n
+    c, s = abs(h[0]), abs(h[1])
+    det = c * c - s * s
+    L = w = -1.0
+    if abs(det) > 0.3:
+        L, w = (c * W - s * H) / det, (c * H - s * W) / det
+    if not (0 < w <= L):
+        L = (W + H) / ((c + s) * (1 + 1 / ASPECT))
+        w = L / ASPECT
+    m = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+    nrm = np.array([-h[1], h[0]])
+    return np.array([m + a * L / 2 * h + b * w / 2 * nrm for a, b in ((1, 1), (1, -1), (-1, -1), (-1, 1))])
+
+
 def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P: np.ndarray,
                 line: np.ndarray, min_px: float) -> list[tuple[float, float, float]]:
     """Time spans (t0, t1, max px over) when a corner of the vehicle's box is over the line, on
@@ -348,10 +389,16 @@ def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P
         return []
     bt, corners = boxes
     centre = np.column_stack([np.interp(bt, t, P[:, 0]), np.interp(bt, t, P[:, 1])])
+    # direction of travel at each detection, over +-0.25 s (the overall one when stopped)
+    tb, ta = np.clip(bt + 0.25, t[0], t[-1]), np.clip(bt - 0.25, t[0], t[-1])
+    head = np.column_stack([np.interp(tb, t, P[:, 0]) - np.interp(ta, t, P[:, 0]),
+                            np.interp(tb, t, P[:, 1]) - np.interp(ta, t, P[:, 1])])
+    slow = np.linalg.norm(head, axis=1) < 1.0
+    head[slow] = P[-1] - P[0]
     dc, beside_c = signed_distance(centre, line)
     over = np.zeros(len(bt))
     for k in range(len(bt)):
-        dk, bk = signed_distance(corners[k], line)
+        dk, bk = signed_distance(footprint(corners[k], head[k]), line)
         if bk.any() or beside_c[k]:
             over[k] = max(0.0, float((-(np.sign(dc[k]) or 1.0) * dk).max()))
     on = over >= min_px
@@ -416,9 +463,9 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
 
     line_events: list[dict] = []
     for sl in cal.solid_lines:
-        line = np.array(sl.points, float)
-        if len(line) < 2:
+        if len(sl.points) < 2:
             continue
+        line = solid_curve(sl.points)
         ppm = _px_per_m(cal_res.H, line)
         hyst = vs.hysteresis_m * ppm
         for tid, (t, P) in traj.items():
@@ -431,6 +478,7 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
                 return {"type": "solid_line", "name": sl.name, "track_id": int(tid), "class": r.cls,
                         "t_s": round(t0, 3), "frame": int(round(t0 * fps)), "how": how,
                         "duration_s": None if span is None else round(span[1] - span[0], 2),
+                        "t_end_s": round(t0 if span is None else max(t0, span[1]), 3),
                         "max_over_m": None if span is None else round(span[2] / ppm, 2),
                         "speed_kmh": _speed_at(r, t0, fps)}
 

@@ -167,12 +167,12 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     for m in timing_msgs:
         reporter.log(m, "warning")
 
-    cal = calibration.compute(cfg.calibration, (info.width, info.height))
-    if not calibration.has_measurement_geometry(cfg.calibration):
-        raise ValueError("Draw a path of motion, measurement lines A and B, a stop line or a solid line "
-                         "in the calibration")
-    if not cal.fit_ok:
-        raise ValueError(cal.warnings[0])
+    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
+    if cal.method == calibration.UNCALIBRATED:
+        reporter.log(cal.warnings[0], "warning")
+    elif not calibration.has_measurement_geometry(cfg.calibration):
+        reporter.log("Nothing to measure yet (no path, lines A/B, stop line or solid line): vehicles are only "
+                     "detected and tracked. Draw them later and Recompute.", "warning")
     roi = np.array(cfg.calibration.roi, np.float32) if cfg.calibration.roi and len(cfg.calibration.roi) >= 3 else None
 
     reporter.progress("loading model", 0, 1)
@@ -373,7 +373,7 @@ def find_violations(cfg: ProjectConfig, cal, df: pd.DataFrame, renders: dict, fp
     """Red-light running and solid-line crossings (see violations.py); None when none are set up.
     With `sample`, lights added or moved since the analysis are read from the video (decode only)."""
     c = cfg.calibration
-    if not (c.red_lights or c.solid_lines):
+    if not (c.red_lights or c.solid_lines) or cal.method == calibration.UNCALIBRATED:
         return None
     samples = violations.load_samples(out, violations.lights_key(c, cfg.violations))
     if samples is None and sample and violations.needs_samples(c):
@@ -384,6 +384,8 @@ def find_violations(cfg: ProjectConfig, cal, df: pd.DataFrame, renders: dict, fp
 
 def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal, fps: float) -> dict:
     """Per-vehicle uncertainty budget (fills the speed_*_u_kmh fields); see uncertainty.py."""
+    if cal.method == calibration.UNCALIBRATED:
+        return None
     return uncertainty.annotate(results, renders, cfg.calibration, cal, fps, cfg.uncertainty,
                                 cfg.speed.momentary_window_s)
 
@@ -458,7 +460,7 @@ def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     out = Path(out_dir)
     info = probe(cfg.source)
     fps = resolve_capture_fps(cfg, info, Reporter())
-    cal = calibration.compute(cfg.calibration, (info.width, info.height))
+    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
     df = pd.read_parquet(out / "tracks.parquet")
     world = calibration.apply_h(cal.H, reference_positions(df))
     df["x_m"], df["y_m"] = world[:, 0], world[:, 1]

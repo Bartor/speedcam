@@ -224,8 +224,12 @@ export default function ResultsScreen({ project, onChanged }: Props) {
             {res.uncertainty && <p className="footnote">(± %) = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias). Hover a speed for its breakdown.</p>}
             {rows.length === 0 && (
               <div className="banner warn small">
-                No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.
-                {res.vehicles.length === 0 && res.run.tracks !== undefined && <> Detector: {res.run.detections_per_frame?.toFixed(1)} detections/frame,
+                {res.vehicles.length === 0 && res.calibration?.method === "none" ? (
+                  <>Tracking only: {res.run.tracks ?? 0} vehicles were tracked, but there's no usable calibration, so nothing was measured. Calibrate and draw a path or lines, then press Recompute.</>
+                ) : res.vehicles.length === 0 && !(project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) && !(project.config.calibration.line_a && project.config.calibration.line_b) ? (
+                  <>No speeds measured: {res.run.tracks ?? 0} vehicles were tracked, but there's no path or lines A/B to measure them on. Draw them on the Calibrate screen, then press Recompute.</>
+                ) : <>No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.</>}
+                {res.vehicles.length === 0 && res.calibration?.method !== "none" && ((project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) || (project.config.calibration.line_a && project.config.calibration.line_b)) && res.run.tracks !== undefined && <> Detector: {res.run.detections_per_frame?.toFixed(1)} detections/frame,
                   {" "}{res.run.tracks} tracks ({res.run.tracks_long_enough} long enough): {res.run.tracks_crossing_a_only} crossed only A,
                   {" "}{res.run.tracks_crossing_b_only} only B, {res.run.tracks_crossing_neither} neither.
                   {res.run.detections_per_frame < 1 ? " Very few detections: try another model or tiling (Process → Preview tracking)." :

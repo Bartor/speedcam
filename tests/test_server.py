@@ -226,3 +226,26 @@ def test_scheduler_one_detection_job_on_gpu():
     assert m._next().id == "c"  # p2's analysis waits for the GPU, p1 is busy
     m.running = {}
     assert m._next().id == "a"
+
+
+@pytest.mark.slow
+def test_tracking_only_then_calibrate_and_recompute(tmp_path):
+    """No calibration and nothing to measure: the analysis still runs (detection + tracking only);
+    calibrating afterwards and recomputing gives the speeds without analysing again."""
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=70.0, size=(640, 360), m_per_px=0.1)
+    client = TestClient(create_app(tmp_path / "projects"))
+    p = client.post("/api/projects", json={"source": cfg.source}).json()
+    pid = p["id"]
+    assert _wait(client, p["proxy_job"])["status"] == "done"
+    client.patch(f"/api/projects/{pid}", json={"capture_fps": 120, "detection": {"type": "blob"}})
+    job = client.post(f"/api/projects/{pid}/analyze").json()
+    end = _wait(client, job["id"])
+    assert end["status"] == "done", end
+    res = client.get(f"/api/projects/{pid}/results").json()
+    assert res["vehicles"] == [] and res["calibration"]["method"] == "none" and res["run"]["tracks"] >= 1
+    assert client.get(f"/api/projects/{pid}/overlay").status_code == 200
+
+    client.put(f"/api/projects/{pid}/calibration", json=cfg.calibration.model_dump(mode="json"))
+    res = client.post(f"/api/projects/{pid}/recompute").json()
+    assert res["stats_max"]["n_valid"] == 1
+    assert res["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)

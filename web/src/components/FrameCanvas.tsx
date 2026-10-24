@@ -8,6 +8,28 @@ const MIN_CORNERS: Partial<Record<Tool, number>> = { roi: 3, polygon: 4, path: 2
 /** Open polylines: finished with Enter or a double-click, never closed on the first point. */
 const OPEN = new Set<Tool>(["path", "stopline", "solid"]);
 
+/** Centripetal Catmull-Rom curve through the points (as the server draws solid lines and paths). */
+export function smoothCurve(P: Pt[], per = 24): Pt[] {
+  if (P.length < 3) return P;
+  const ext: Pt[] = [[2 * P[0][0] - P[1][0], 2 * P[0][1] - P[1][1]], ...P,
+    [2 * P[P.length - 1][0] - P[P.length - 2][0], 2 * P[P.length - 1][1] - P[P.length - 2][1]]];
+  const out: Pt[] = [];
+  const knot = (a: Pt, b: Pt) => Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]), 1e-9) ** 0.5;
+  for (let i = 1; i < ext.length - 2; i++) {
+    const [p0, p1, p2, p3] = [ext[i - 1], ext[i], ext[i + 1], ext[i + 2]];
+    const t1 = knot(p0, p1), t2 = t1 + knot(p1, p2), t3 = t2 + knot(p2, p3);
+    for (let s = 0; s < per; s++) {
+      const t = t1 + ((t2 - t1) * s) / per;
+      const L = (a: Pt, b: Pt, ta: number, tb: number): Pt => [((tb - t) * a[0] + (t - ta) * b[0]) / (tb - ta), ((tb - t) * a[1] + (t - ta) * b[1]) / (tb - ta)];
+      const A1 = L(p0, p1, 0, t1), A2 = L(p1, p2, t1, t2), A3 = L(p2, p3, t2, t3);
+      const B1 = L(A1, A2, 0, t2), B2 = L(A2, A3, t1, t3);
+      out.push(L(B1, B2, t1, t2));
+    }
+  }
+  out.push(P[P.length - 1]);
+  return out;
+}
+
 /** Arrow across a polyline's middle showing which crossings count (screen coordinates). */
 export function directionArrow(P: Pt[], dir: StopDirection): { from: Pt; to: Pt; heads: Pt[] } | null {
   if (P.length < 2) return null;
@@ -405,8 +427,9 @@ export default function FrameCanvas({ src, cal, tool, onChange, onSegmentAdded, 
     // solid lines and red-light setups (lights, stop lines with the counted direction)
     (cal.solid_lines ?? []).forEach((sl) => {
       if (sl.points.length < 1) return;
-      polyline(sl.points, "rgba(0,0,0,.8)", 6);
-      polyline(sl.points, SOLID_COLOR, 3);
+      const curve = smoothCurve(sl.points);
+      polyline(curve, "rgba(0,0,0,.8)", 6);
+      polyline(curve, SOLID_COLOR, 3);
       sl.points.forEach((p) => dot(p, SOLID_COLOR, 3.5));
       label(sl.points[0], sl.name, SOLID_COLOR);
     });

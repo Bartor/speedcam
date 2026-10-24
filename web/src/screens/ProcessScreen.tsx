@@ -76,6 +76,13 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
           <span>· calibration {project.calibration_result.error ? <span className="bad-text">incomplete</span> : `${fmt(project.calibration_result.cm_per_px, 3)} cm/px, gap ${fmt(project.calibration_result.line_gap_m, 2)} m`}</span>
         </div>
         {project.timing_warnings.map((w) => <div key={w} className="banner info small">{w}</div>)}
+        {(() => {
+          const c = cfg.calibration, r = project.calibration_result;
+          const geometry = (c.paths ?? []).some((p: any) => p.points.length >= 2) || (c.line_a && c.line_b) ||
+            (c.solid_lines ?? []).some((l: any) => l.points.length >= 2) || (c.red_lights ?? []).some((s: any) => s.stop_lines.length);
+          const why = r.error || r.fit_ok === false ? "there's no usable calibration" : !geometry ? "nothing to measure is drawn (no path, lines A/B, stop line or solid line)" : null;
+          return why && <div className="banner info small"><b>Tracking only:</b> {why}, so the analysis detects and tracks vehicles without measuring them. Add those later and press Recompute on the results: no need to analyse again.</div>;
+        })()}
         <div className="row">
           {!running ? <button className="primary" onClick={start}>{project.status.results_json ? "Re-run analysis" : "Start analysis"}</button>
             : <button className="danger" onClick={() => jobId && api.cancel(jobId)}>Cancel</button>}

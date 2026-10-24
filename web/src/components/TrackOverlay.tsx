@@ -15,11 +15,13 @@ export interface OverlayData {
   }>;
   red_lights?: { name: string; lights: [number, number, number][]; stop_lines: { px: number[]; direction: string }[]; phases: Phase[] }[];
   solid_lines?: { name: string; px: number[] }[];
-  events?: Record<string, { t: number; big: string; small: string; line: string }[]>;
+  events?: Record<string, { t: number; until?: number; big: string; small: string; line: string }[]>;
   label_hold_s?: number;
 }
 
 const VIOLATION = "#ff285a";
+/** a violation's label shows from its start, while it lasts (on a solid line) and `hold` after */
+const showing = (e: { t: number; until?: number }, t: number, hold: number) => e.t <= t && t <= Math.max(e.until ?? e.t, e.t) + hold;
 const phaseAt = (phases: Phase[], t: number) => phases.find((p) => p.t0 <= t && t < p.t1)?.state ?? "unknown";
 
 const LINE_A = "#00c8ff", LINE_B = "#ff3cc8", GREY = "#aaaaaa";
@@ -112,7 +114,7 @@ export default function TrackOverlay({ data, video, frame, rotation = 0 }: { dat
       for (let i = 0; i < flatPts.length; i += 2) { const p = P(flatPts[i], flatPts[i + 1]); if (i) ctx.lineTo(...p); else ctx.moveTo(...p); }
       ctx.stroke();
     };
-    const hot = new Set(Object.values(data.events ?? {}).flat().filter((e) => e.big === "SOLID LINE" && t >= e.t && t - e.t <= hold).map((e) => e.line));
+    const hot = new Set(Object.values(data.events ?? {}).flat().filter((e) => e.big === "SOLID LINE" && showing(e, t, 0.5)).map((e) => e.line));
     data.solid_lines?.forEach((sl) => { flat(sl.px, "rgba(0,0,0,.75)", 5); flat(sl.px, hot.has(sl.name) ? VIOLATION : "#f2f2f2", 2.5); });
     data.red_lights?.forEach((r) => {
       const color = PHASE_COLORS[phaseAt(r.phases, t)] ?? PHASE_COLORS.unknown;
@@ -162,7 +164,7 @@ export default function TrackOverlay({ data, video, frame, rotation = 0 }: { dat
       if (ev.length) {
         ctx.strokeStyle = VIOLATION; ctx.lineWidth = 3;
         ctx.beginPath(); pts.forEach((p, k) => (k ? ctx.lineTo(...p) : ctx.moveTo(...p))); ctx.closePath(); ctx.stroke();
-        ev.filter((e) => t - e.t <= hold).forEach((e, k) => label(lx, ly - (fs + 8) * (k + 1), `${e.big} · ${e.small}`, VIOLATION));
+        ev.filter((e) => showing(e, t, hold)).forEach((e, k) => label(lx, ly - (fs + 8) * (k + 1), `${e.big} · ${e.small}`, VIOLATION));
       }
     }
   });

@@ -279,14 +279,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         cfg = store.config(pid)
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
-        if not calib.has_measurement_geometry(cfg.calibration):
-            raise HTTPException(400, "Draw a path of motion, lines A and B, a stop line or a solid line first")
-        try:
-            res = calib.compute(cfg.calibration)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if not res.fit_ok:
-            raise HTTPException(400, res.warnings[0])
+        # no calibration or nothing to measure is fine: the clip is then only detected and tracked
         return jobs.submit(pid, "analyze", _dir(pid)).public()
 
     @app.post("/api/projects/{pid}/preview")
@@ -296,8 +289,6 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         cfg = store.config(pid)
         if not cfg.capture_fps:
             raise HTTPException(400, "Set capture_fps first")
-        if not calib.has_measurement_geometry(cfg.calibration):
-            raise HTTPException(400, "Draw a path of motion, lines A and B, a stop line or a solid line first")
         n = frame if frame is not None else cfg.calibration.reference_frame
         return jobs.submit(pid, "preview", d, {"frame": n, "seconds": seconds}).public()
 

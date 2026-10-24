@@ -320,3 +320,23 @@ def has_violation_geometry(cal: Calibration) -> bool:
 def has_measurement_geometry(cal: Calibration) -> bool:
     """Anything to measure: speeds (lines A/B or a path) or violations."""
     return has_speed_geometry(cal) or has_violation_geometry(cal)
+
+
+UNCALIBRATED = "none"
+
+
+def for_measuring(cal: Calibration, image_size: Optional[tuple[int, int]] = None) -> CalibrationResult:
+    """The calibration to measure with, or, when there is none (or it doesn't fit its check
+    distances), a stand-in in pixels with nothing to measure: the clip is then only detected and
+    tracked. Tracks are stored in pixels, so a calibration, lines or paths added later only need a
+    recompute."""
+    try:
+        res = compute(cal, image_size)
+        if res.fit_ok:
+            return res
+        reason = res.warnings[0]
+    except ValueError as e:
+        reason = str(e)
+    return CalibrationResult(H=np.eye(3), method=UNCALIBRATED, m_per_px=1.0, fit_ok=False,
+                             warnings=[f"Not calibrated ({reason}), so nothing is measured: vehicles are only "
+                                       "detected and tracked. Calibrate, then Recompute."])
