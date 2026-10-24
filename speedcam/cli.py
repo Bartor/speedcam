@@ -113,8 +113,27 @@ def serve(host: str = "127.0.0.1", port: int = 8000,
     os.environ["SPEEDCAM_GPU_JOBS"] = str(max(1, gpu_jobs))
     if open_browser:
         import threading
+        import time
+        import urllib.request
 
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+        local = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+        url = f"http://{local}:{port}"
+
+        def open_when_ready() -> None:
+            # open the browser once the app answers (the first start can take a while: imports,
+            # database), not on a timer that shows "can't connect" on a slow machine
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(f"{url}/api/jobs/active", timeout=2) as r:
+                        if r.status == 200:
+                            webbrowser.open(url)
+                            return
+                except OSError:
+                    pass
+                time.sleep(0.3)
+
+        threading.Thread(target=open_when_ready, daemon=True, name="open-browser").start()
     import asyncio
     import logging
 
