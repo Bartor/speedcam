@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Timeline from "../components/Timeline";
-import Help from "../components/Help";
+import Help, { Advanced } from "../components/Help";
+import { SettingNum } from "../components/Settings";
 import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
@@ -31,12 +32,31 @@ const GROUP_HELP: Partial<Record<ToolGroup, string>> = {
   cal: "calibrate.calibration", lines: "calibrate.measure", rules: "calibrate.solid", area: "calibrate.area",
 };
 
-export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
+/** Setup, in the order it's done: each stage has its own tools and side panel; the frame shows everything. */
+type Stage = "scale" | "measure" | "limits" | "rules";
+const STAGES: { key: Stage; label: string; groups: ToolGroup[]; title: string }[] = [
+  { key: "scale", label: "Scale", groups: ["nav", "cal"], title: "How many metres a pixel is: measured distances on the ground, and how well they're known" },
+  { key: "measure", label: "Measure", groups: ["nav", "lines", "area"], title: "Where speeds are measured: paths of motion or lines A and B, and the area to watch" },
+  { key: "limits", label: "Limits & tolerances", groups: ["nav"], title: "The speed limit, the statistics, and when a measurement counts" },
+  { key: "rules", label: "Rules", groups: ["nav", "rules"], title: "Red lights and solid lines (optional)" },
+];
+
+export default function SetupScreen({ project, onChanged, onNext }: Props) {
   const info = project.info;
   const [cal, setCal] = useState<Calibration>(project.config.calibration);
   const [result, setResult] = useState<CalibrationResult>(project.calibration_result);
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [tool, setTool] = useState<Tool>("move");
+  const [stage, setStage] = useState<Stage>(() => {
+    const c = project.config.calibration, r = project.calibration_result;
+    if (r.error || r.fit_ok === false) return "scale";
+    return (c.paths ?? []).some((pp) => pp.points.length >= 2) || (c.line_a && c.line_b) ? "limits" : "measure";
+  });
+  const stageDef = STAGES.find((s) => s.key === stage)!;
+  const goStage = (s: Stage) => {
+    setStage(s);
+    if (!STAGES.find((x) => x.key === s)!.groups.includes(TOOLS.find((x) => x.key === tool)!.group)) setTool("move");
+  };
   const [focusSeg, setFocusSeg] = useState<number | null>(null);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const { frame } = useVideoFrame(video, info.container_fps);
@@ -150,12 +170,19 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
   const hasRules = setups.some((s) => s.stop_lines.some((l) => l.points.length >= 2)) || solids.some((s) => s.points.length >= 2);
   const ready = !!((hasPath || (cal.line_a && cal.line_b) || hasRules) && !result.error && result.fit_ok !== false);
   const hint = TOOLS.find((t) => t.key === tool)!.hint;
+  const stageDone: Record<Stage, boolean> = {
+    scale: !result.error && result.fit_ok !== false,
+    measure: hasPath || !!(cal.line_a && cal.line_b),
+    limits: true,
+    rules: hasRules,
+  };
+  const next = STAGES[STAGES.findIndex((s) => s.key === stage) + 1];
 
   return (
     <div className="calibrate">
       <div className="cal-main">
         <div className="toolbar" role="toolbar" aria-label="Calibration tools">
-          {GROUPS.map((g) => (
+          {GROUPS.filter((g) => stageDef.groups.includes(g.key)).map((g) => (
             <div key={g.key} className="tool-group">
               {g.label && <span className="tool-group-label">{g.label}{GROUP_HELP[g.key] && <Help topic={GROUP_HELP[g.key]!} />}</span>}
               <div className="tool-btns">
@@ -205,7 +232,15 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
       </div>
 
       <aside className="cal-side">
+        <nav className="stage-tabs" aria-label="Setup stages">
+          {STAGES.map((s, i) => (
+            <button key={s.key} className={`stage-tab${stage === s.key ? " active" : ""}`} title={s.title} onClick={() => goStage(s.key)}>
+              <span className={`stage-num${stageDone[s.key] ? " done" : ""}`}>{stageDone[s.key] && stage !== s.key ? "✓" : i + 1}</span>{s.label}
+            </button>
+          ))}
+        </nav>
         <div className="cal-side-scroll">
+        {stage === "scale" && <>
         <section className="panel">
           <div className="row"><h3 className="grow">Calibration<Help topic="calibrate.calibration" /></h3><span className={`tag ${saving === "error" ? "bad" : saving === "saved" ? "ok" : ""}`}>{saving === "saving" ? "saving…" : saving === "saved" ? "saved" : saving === "error" ? "save failed" : ""}</span></div>
           {result.error ? <div className="banner warn">{result.error}</div> : (
@@ -325,6 +360,9 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           })}
         </section>
 
+        <TolerancesPanel project={project} onChanged={onChanged} />
+        </>}
+        {stage === "measure" && <>
         <section className="panel">
           <h3>Paths of motion<Help topic="calibrate.measure" /> {paths.length > 0 && <span className="muted small">({paths.length})</span>}</h3>
           {paths.map((pp, k) => {
@@ -361,6 +399,27 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           )}
         </section>
 
+        <section className="panel">
+          <h3>Measurement lines & ROI<Help topic="calibrate.area" /></h3>
+          {(["line_a", "line_b"] as const).map((k) => (
+            <div key={k} className="item-row">
+              <span className="swatch" style={{ background: k === "line_a" ? "#00c8ff" : "#ff3cc8" }} />
+              <span className="grow">Line {k === "line_a" ? "A" : "B"}</span>
+              <span className={`small ${cal[k] ? "ok-text" : "muted"}`}>{cal[k] ? "✓ set" : "not set"}</span>
+              {cal[k] && <button className="x" onClick={() => update({ ...cal, [k]: null })}>✕</button>}
+            </div>
+          ))}
+          <div className="item-row">
+            <span className="swatch" style={{ background: "#4cd97b" }} />
+            <span className="grow">ROI</span>
+            <span className="muted small">{cal.roi ? `${cal.roi.length} corners` : "whole frame"}</span>
+            {cal.roi && <button className="x" onClick={() => update({ ...cal, roi: null })}>✕</button>}
+          </div>
+        </section>
+
+        </>}
+        {stage === "limits" && <LimitsPanel project={project} onChanged={onChanged} />}
+        {stage === "rules" && <>
         <section className="panel">
           <h3>Red lights<Help topic="calibrate.redlights" /> {setups.length > 0 && <span className="muted small">({setups.length})</span>}</h3>
           {setups.length === 0 && <p className="muted small">Mark a traffic light with the <b>Light</b> tool and its stop line with <b>Stop line</b>. A vehicle whose front reaches the stop line while the light is red is reported. Add one setup per signal group.</p>}
@@ -482,32 +541,94 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
           )}
         </section>
 
-        <section className="panel">
-          <h3>Measurement lines & ROI<Help topic="calibrate.area" /></h3>
-          {(["line_a", "line_b"] as const).map((k) => (
-            <div key={k} className="item-row">
-              <span className="swatch" style={{ background: k === "line_a" ? "#00c8ff" : "#ff3cc8" }} />
-              <span className="grow">Line {k === "line_a" ? "A" : "B"}</span>
-              <span className={`small ${cal[k] ? "ok-text" : "muted"}`}>{cal[k] ? "✓ set" : "not set"}</span>
-              {cal[k] && <button className="x" onClick={() => update({ ...cal, [k]: null })}>✕</button>}
-            </div>
-          ))}
-          <div className="item-row">
-            <span className="swatch" style={{ background: "#4cd97b" }} />
-            <span className="grow">ROI</span>
-            <span className="muted small">{cal.roi ? `${cal.roi.length} corners` : "whole frame"}</span>
-            {cal.roi && <button className="x" onClick={() => update({ ...cal, roi: null })}>✕</button>}
-          </div>
-        </section>
-
+        </>}
         </div>
         <div className="cal-foot">
-          <button className="primary wide lg" onClick={onNext}>Continue to processing →</button>
+          <div className="row">
+            {next && <button className="grow" onClick={() => goStage(next.key)}>Next: {next.label}</button>}
+            <button className="primary grow lg" onClick={onNext}>Continue to Analyze →</button>
+          </div>
           {!ready && <p className="muted small">{result.fit_ok === false ? "The calibration doesn't fit its check distances (see above), so nothing would be measured: " : result.error ? "No calibration yet, so nothing will be measured: " : "Nothing to measure yet (no path, lines A/B, stop line or solid line): "}
-            the analysis only detects and tracks the vehicles. Calibrate and draw them later, then press Recompute on the results.</p>}
+            the analysis only detects and tracks the vehicles. Set them up later, then press Recompute in Review.</p>}
         </div>
       </aside>
     </div>
+  );
+}
+
+/** How well the calibration inputs are known: they make each speed's margin of error. */
+function TolerancesPanel({ project, onChanged }: { project: Project; onChanged: (p: Project) => void }) {
+  const us = (project.config as any).uncertainty ?? {};
+  const set = async (patch: Record<string, unknown>) => onChanged(await api.patch(project.id, { uncertainty: patch }));
+  return (
+    <section className="panel">
+      <h3>Tolerances<Help topic="setup.tolerances" /></h3>
+      <div className="form-grid compact">
+        <label title="Standard uncertainty of each typed distance: tape ~2 cm, orthophoto ~10 cm">Distances known to ±</label>
+        <SettingNum value={Math.round((us.distance_tolerance_m ?? 0.05) * 1000) / 10} unit="cm" step={0.5} min={0}
+          onCommit={(v) => set({ distance_tolerance_m: (v ?? 5) / 100 })} />
+        <label title="Standard uncertainty of each clicked calibration point">Clicks precise to ±</label>
+        <SettingNum value={us.click_tolerance_px ?? 0.5} unit="px" step={0.1} min={0} onCommit={(v) => set({ click_tolerance_px: v ?? 0.5 })} />
+        <label title="Drone height above the road, from the flight log. Bounds the height-parallax bias (vehicle tops are closer to the camera, so speeds read slightly high).">Drone height</label>
+        <SettingNum value={us.drone_height_m ?? null} unit="m" step={1} min={0} placeholder="unknown" onCommit={(v) => set({ drone_height_m: v })} />
+      </div>
+      <p className="muted small">They make each speed's margin of error (95 %), Monte Carlo over these tolerances. Without a drone height the height-parallax
+        bias isn't in the margin.</p>
+    </section>
+  );
+}
+
+/** The speed limit, the statistics and the speed checks: one place for "when does a measurement count". */
+function LimitsPanel({ project, onChanged }: { project: Project; onChanged: (p: Project) => void }) {
+  const c = project.config as any;
+  const patch = async (section: string, p: Record<string, unknown>) => onChanged(await api.patch(project.id, { [section]: p }));
+  return (
+    <>
+      <section className="panel">
+        <h3>Speed limit<Help topic="setup.limit" /></h3>
+        <div className="form-grid compact">
+          <label>Speed limit</label>
+          <SettingNum value={c.render.speed_limit_kmh ?? 50} unit="km/h" step={5} min={5} onCommit={(v) => patch("render", { speed_limit_kmh: v ?? 50 })} />
+        </div>
+        <p className="muted small">Counts vehicles over the limit in Review, draws the limit on the speed graphs and colours speeds in the video
+          (green up to it, amber up to 10 km/h over, red beyond).</p>
+      </section>
+      <section className="panel">
+        <h3>Statistics<Help topic="results.stats" /></h3>
+        <div className="form-grid compact">
+          <label title="How close the 85th percentile should be known: sets how many vehicles are needed (ITE spot-speed formula)">p85 known to ±</label>
+          <SettingNum value={c.stats.permitted_error_kmh ?? 2} unit="km/h" step={0.5} min={0.1} onCommit={(v) => patch("stats", { permitted_error_kmh: v ?? 2 })} />
+          <label>Confidence</label>
+          <select value={String(c.stats.confidence ?? 0.95)} onChange={(e) => patch("stats", { confidence: +e.target.value })}>
+            <option value="0.9">90 %</option><option value="0.95">95 %</option><option value="0.99">99 %</option>
+          </select>
+        </div>
+      </section>
+      <section className="panel">
+        <h3>When a measurement counts<Help topic="setup.checks" /></h3>
+        <div className="form-grid compact">
+          <label title="A detection gap longer than this makes the average inconclusive (the max still stands)">Detection gap up to</label>
+          <SettingNum value={c.speed.max_gap_s ?? 0.3} unit="s" step={0.05} min={0} onCommit={(v) => patch("speed", { max_gap_s: v ?? 0.3 })} />
+          <label title="Less cleanly tracked time than this between the lines: no max">Clean tracking at least</label>
+          <SettingNum value={c.speed.min_clean_s ?? 0.5} unit="s" step={0.1} min={0} onCommit={(v) => patch("speed", { min_clean_s: v ?? 0.5 })} />
+          <label title="Momentary speed (max, graphs) is measured over this window. Shorter follows changes faster but is noisier.">Momentary speed over</label>
+          <SettingNum value={c.speed.momentary_window_s ?? 0.5} unit="s" step={0.05} min={0.1} onCommit={(v) => patch("speed", { momentary_window_s: v ?? 0.5 })} />
+        </div>
+        <Advanced id="setup-checks">
+          <div className="form-grid compact">
+            <label title="Accelerations above this flag the vehicle (a tracking jump, not real driving)">Max acceleration</label>
+            <SettingNum value={c.speed.max_accel ?? 8} unit="m/s²" step={0.5} min={0} onCommit={(v) => patch("speed", { max_accel: v ?? 8 })} />
+            <label title="Max deviation from a local constant-acceleration fit: an ID switch or a box jump is a metre or more">Max position jump</label>
+            <SettingNum value={c.speed.max_residual_m ?? 0.5} unit="m" step={0.1} min={0} onCommit={(v) => patch("speed", { max_residual_m: v ?? 0.5 })} />
+            <label>Smoothing window</label>
+            <SettingNum value={c.speed.smooth_window_s ?? 0.25} unit="s" step={0.05} min={0} onCommit={(v) => patch("speed", { smooth_window_s: v ?? 0.25 })} />
+            <label title="Lines mode: the line-crossing speed may differ from the path speed by this share">Line / path disagreement</label>
+            <SettingNum value={c.speed.max_disagreement ?? 0.02} step={0.005} min={0} onCommit={(v) => patch("speed", { max_disagreement: v ?? 0.02 })} />
+          </div>
+        </Advanced>
+        <p className="muted small">After an analysis, changes here apply with Recompute in Review; no new analysis is needed.</p>
+      </section>
+    </>
   );
 }
 

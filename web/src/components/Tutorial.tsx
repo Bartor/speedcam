@@ -7,37 +7,37 @@ const STEPS: { title: string; body: string[]; tip?: string }[] = [
     title: "Welcome to speedcam",
     body: [
       "speedcam measures vehicle speeds in drone footage, and can check red-light running and solid-line crossings. Everything runs on this computer; no video leaves it.",
-      "A project goes through five steps, shown at the top: Import → Calibrate → Process → Results → Export.",
+      "A project goes through five steps, shown at the top: Import → Setup → Analyze → Review → Export.",
     ],
     tip: "This takes a minute. You can skip it and reopen it any time from Tutorial in the top bar.",
   },
   {
     title: "1 · Import",
     body: [
-      "Pick a video from the file browser on the right. Each video gets one project; opening it again takes you back to it.",
+      "Pick a video from the file browser on the right. Each video gets one project; opening it again takes you back to it. A small proxy is built for smooth scrubbing.",
       "Check the capture fps: speeds depend on it. DJI slow-motion clips are recorded at 100/120 fps but stored at 30.",
     ],
   },
   {
-    title: "2 · Calibrate",
+    title: "2 · Setup",
     body: [
-      "Teach the app the scale: click two ground points and type their measured distance (straight-down footage), or use Polygon / Rectangle with measured sides for views at an angle.",
-      "Then draw where to measure: a Path along each road (in the direction of travel), or lines A and B. Optionally add red lights and solid lines.",
+      "Everything you set before analysing, in four stages. Scale: click two ground points and type their measured distance (straight-down footage), or use Polygon / Rectangle with measured sides for views at an angle, and say how well they're known.",
+      "Measure: a Path along each road (in the direction of travel), or lines A and B. Limits & tolerances: the speed limit and when a measurement counts. Rules (optional): red lights and solid lines.",
     ],
     tip: "Measured distances matter most: 20 cm off over 20 m is already 1 %.",
   },
   {
-    title: "3 · Process",
+    title: "3 · Analyze",
     body: [
-      "Start the analysis: vehicles are detected, tracked and measured. A preview run on a few seconds checks the settings first.",
-      "For long videos, scan for activity first and analyse only the parts with moving vehicles.",
+      "1. Find the activity: a quick scan shows on the timeline where vehicles move. 2. Choose what to analyse: only those parts, the whole clip, or parts you pick on the timeline.",
+      "3. Check and run: a preview on a few seconds checks the detector and the camera setting, then the analysis detects, tracks and measures the vehicles.",
     ],
   },
   {
-    title: "4 · Results",
+    title: "4 · Review",
     body: [
       "The video with a live overlay and the list of measured vehicles beside it: pick one to see its speed along the section, with any violations marked. Name vehicles, and merge one the tracker split in two.",
-      "Statistics (mean, p85), violations and margins of error below. Changed a line, path or threshold? Press Recompute: no new analysis.",
+      "Statistics, violations, possible splits, the full table and the validation run in the tabs below. Changed something in Setup? Press Recompute: no new analysis.",
     ],
   },
   {

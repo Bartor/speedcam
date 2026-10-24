@@ -26,7 +26,8 @@ from .db import Database
 ID_RE = re.compile(r"^[a-z0-9-]{1,80}$")
 OUTPUT_FILES = {"proxy.mp4", "render.mp4", "results.csv", "results.json", "tracks.parquet",
                 "stabilization.csv", "render.json", "validation.json", "violations.csv"}
-SCREENS = {"import", "calibrate", "process", "results", "export"}
+SCREENS = {"import", "setup", "analyze", "review", "export",
+           "calibrate", "process", "results"}  # (the last three: step names before the five-step flow)
 FRAME_CACHE_MAX = 400  # decoded full-res frames kept on disk per project
 OVERLAY_VERSION = 7  # bump when overlay_data() output changes, so cached copies are rebuilt
 

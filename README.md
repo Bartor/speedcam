@@ -103,8 +103,8 @@ it elsewhere with `SPEEDCAM_UI_REPO=owner/name`.
 - *Port 8000 in use:* `speedcam serve --port 8010`.
 - *Analysis very slow:* `speedcam --check` says whether a GPU is used. With an NVIDIA GPU
   but CPU PyTorch, delete `.venv` and run `speedcam` again.
-- *GPU out of memory:* lower *Frames per GPU batch* under Advanced settings on the
-  Process screen.
+- *GPU out of memory:* lower *Frames per GPU batch* under Advanced settings in
+  Analyze.
 
 Manual setup, if you prefer:
 
@@ -133,7 +133,7 @@ analyses with this Auto: 0455 39 valid vehicles (old Auto 36), 0446 25 (25); 045
 the same two models as the old Auto (26). The same cars' speeds agree within 0.4%. Filling the
 top-down model in with VisDrone instead cost 0457 nine vehicles: its extra boxes on
 cars under trees broke their tracks.
-Any model can still be chosen on its own on the Process screen.
+Any model can still be chosen on its own in Analyze.
 
 **VisDrone (trained)** is an optional third detector: `yolo11x` fine-tuned on
 VisDrone2019-DET (drone footage of city traffic at many heights and angles), with
@@ -162,6 +162,13 @@ of up to 1 s: missed frames are interpolated from the detections on either side.
 speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam-projects
 ```
 
+A project goes through five steps: **Import** (the video and its real frame rate) →
+**Setup** (scale, where to measure, speed limit and tolerances, rules) → **Analyze**
+(find the activity, choose what to analyse, run) → **Review** (speeds, vehicles,
+violations; fix and name vehicles) → **Export** (the annotated video and the data).
+Everything that's set rather than measured lives in Setup; after an analysis, Review
+says when Setup changed since, and **Recompute** applies it without analysing again.
+
 0. **Projects:** the start page lists every project in the data folder with a
    thumbnail, its status and headline stats (valid/measured, mean, p85). Click a
    project to resume on the screen you left it. Projects can be renamed, deleted
@@ -183,7 +190,7 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    H.264 proxy for scrubbing. Confirm `capture_fps`. **DJI slow-motion clips** are
    stored at e.g. 30 fps, but were captured at 100/120 fps. Real time is always
    `frame / capture_fps`.
-   **View rotation** (⟲ ⟳ here and on the Calibrate screen) turns the picture by 90°
+   **View rotation** (⟲ ⟳ here and in Setup) turns the picture by 90°
    steps, e.g. for a drone shot with the road running across the frame. It only
    changes how the video is shown, previewed and rendered. Calibration, tracks and
    results stay in the original frame's pixels, so it works on analysed clips
@@ -195,10 +202,10 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    rotation is set from the flag, so they show upright. The proxy and the render
    ignore the flag too, so picture and overlay always line up. Projects made before
    this rebuild their proxy once when opened, with nothing to re-analyse.
-   **Timeline** (Calibrate, Process, Results and Export): a scrubbable view of the whole clip
+   **Timeline** (Setup, Analyze, Review and Export): a scrubbable view of the whole clip
    with a time ruler, frame thumbnails (hover for a bigger preview), the activity scan
-   and the parts to analyse; on Results also each measured vehicle (click to jump to
-   it). Drag on the bottom lane to cut a stretch out (starting over blue) or add one back
+   and the parts to analyse (on Export: to render); in Review and Export also each
+   measured vehicle (click to jump to it). Drag on the bottom lane to cut a stretch out (starting over blue) or add one back
    (starting elsewhere), drag a part's edge to adjust it, or press **I** and **O** at the
    playhead for in and out points. *Use activity* takes the scan's parts, *Analyse all*
    the whole clip. The video has its own controls (frame steps, real-time readout,
@@ -208,7 +215,11 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    when zoomed in, **Alt** or **Ctrl**+wheel zooms at the cursor, **Shift**+wheel moves
    the playhead frame by frame; **+** / **−** zoom at the playhead and **\\** fits the
    whole clip. **?** (or the *Shortcuts* button) lists them all.
-2. **Calibrate:** choose a reference frame. For any view that isn't straight down,
+2. **Setup**, in four stages, each with its own tools and side panel (the frame always
+   shows everything): **Scale** (the calibration and its tolerances), **Measure** (paths
+   or lines A/B, and the area to watch), **Limits & tolerances** (the speed limit, the
+   statistics, and when a measurement counts) and **Rules** (red lights, solid lines).
+   **Scale:** choose a reference frame. For any view that isn't straight down,
    use **Polygon**: click 4+ flat ground points, then type measured sides and
    diagonals. A polygon with N corners needs 2N−3 distances to fix its shape (a
    quadrilateral: 4 sides + 1 diagonal). The shape is solved by least squares, and
@@ -249,22 +260,31 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    them after the analysis and press **Recompute**. Lights added or moved since then
    are read from the video (decode only, no GPU). A project can have only
    violation checks, without lines A/B or paths.
+   **Tolerances** (Scale): how well each typed distance and each click is known, and the
+   drone height; each speed's margin of error comes from them (see below).
+   **Limits & tolerances:** the **speed limit** (vehicles over it in Review, the line on
+   the speed graphs, the colours in the video); how close the p85 should be known (it
+   sets the sample size needed) and the confidence of the intervals; and when a
+   measurement counts: the longest detection gap that keeps an average conclusive, the
+   least clean tracking time for a max, and the momentary-speed window (more under
+   Advanced: max acceleration, max position jump, smoothing).
    **Nothing set up is fine too:** without a calibration, or with nothing to measure, the
-   analysis only detects and tracks; calibrate and draw lines later and press Recompute.
-3. **Process:**
-   **Activity scan (long videos, CCTV):** *Scan for vehicles* reads about one frame a
+   analysis only detects and tracks; set them up later and press Recompute in Review.
+3. **Analyze**, in three steps beside the clip and its timeline:
+   **1. Find the activity (long videos, CCTV):** *Scan for vehicles* reads about one frame a
    second at the detection size (1280 px), only keyframes where the file has them every
    2 s or less, with the analysis's own detector. A timeline shows moving vehicles per
    second (bright) and all of them (dim). A box that stays put between neighbouring
    samples is a parked or waiting vehicle, so a street of parked cars isn't "activity".
-   *Analyse only the parts with vehicles* keeps the parts with moving vehicles, padded
-   by 2 s and with gaps under 5 s joined. The analysis then seeks to each part, and
+   **2. Choose what to analyse:** *Only the activity* keeps the parts with moving vehicles,
+   padded by 2 s and with gaps under 5 s joined; *The whole clip*; or parts picked on the
+   timeline. The analysis then seeks to each part, and
    tracking starts fresh in each one. Frame numbers and times stay those of the whole
    video. Stabilization registers every frame to the reference frame, so jumps are fine:
    it re-finds the reference after each. The render covers only those parts too, back to
    back (optional). Measured: a 57 s 4K HEVC clip scans in ~21 s, mostly decoding;
    1080p H.264 is much faster.
- choose **Camera: Hovering** (stabilize every frame) or **Still**
+   **3. Check and run:** choose **Camera: Hovering** (stabilize every frame) or **Still**
    (skip stabilization, faster). A preview run with stabilization on measures camera
    drift against the reference frame, in px and in cm on the ground, and says whether
    skipping is safe. **Preview tracking** runs detection, stabilization and tracking on a
@@ -272,7 +292,7 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    lines A/B. It also reports how many tracks crossed each line. Use it to check
    settings before the full run, which streams the same tracking preview and can be
    cancelled.
-4. **Results:** a dashboard. The proxy video, with a live tracking overlay drawn in
+4. **Review:** a dashboard. The proxy video, with a live tracking overlay drawn in
    the browser (boxes, trails, momentary speed between the lines, then max and average),
    has the list of measured vehicles beside it: a picture of each, its name, max and
    average speed, and marks for violations (⛔), merged tracks (⧉), an inconclusive
@@ -299,15 +319,18 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    the cleanly tracked frames on either side stands. *Split* undoes it; the stored tracks
    are never changed. A merge re-measures the clip (like Recompute), and a new analysis
    drops names and merges, since its track numbers are new.
-   Statistics and the histogram switch between max and average. They include
-   mean, p85 and p95 with confidence intervals, plus the ITE sample size needed
-   against the valid n. A **calibration check** warns when every vehicle's speed
-   rises or falls by the same share along A→B. Drivers vary but geometry doesn't, so
-   a shared trend means a calibration error that biases max speeds. If nothing was
-   measured, the page says where tracks were lost. *All measurements* folds out the
-   full table with every column.
-   **Recompute** re-runs the speed and violation steps, without re-detecting.
-   With violation checks, a **Violations** panel shows each light's phase timeline
+   Below them, one panel with tabs. **Speeds:** mean, p85 and p95 with confidence
+   intervals, σ and the ITE sample size needed against the valid n, for the max or the
+   average, with the histogram and what the margins of error cover. **Violations**,
+   **Possibly split** (vehicles the tracker split in two), **All measurements** (the full
+   table, every column) and **Validation run**. A **calibration check** warns when every
+   vehicle's speed rises or falls by the same share along A→B. Drivers vary but geometry
+   doesn't, so a shared trend means a calibration error that biases max speeds. If
+   nothing was measured, the page says where tracks were lost.
+   **Recompute** re-runs the speed and violation steps, without re-detecting; the page
+   asks for it when Setup changed since the results were computed, and says when
+   analysis settings changed (those need a new analysis).
+   With violation checks, the **Violations** tab shows each light's phase timeline
    (red/amber/green, with the runs marked) and lists every red-light run and
    solid-line crossing with its time, vehicle and speed. Click one to watch it. The
    overlay colours stop lines and lights by the current phase and tags violating
@@ -393,13 +416,13 @@ standard uncertainty, combined root-sum-square and doubled.
 
 In the app each vehicle's speed carries its margin as a share of the speed, e.g.
 `54.6 (±2.4 %)`. The inputs (distance tolerance, click precision, drone height) are set per
-project on the Results screen. **Apply & recompute** refreshes the margins
+project in Setup (Scale → Tolerances); **Recompute** in Review refreshes the margins
 without re-detecting. `results.csv` and `results.json` carry `speed_max_u_kmh`,
 `speed_avg_u_kmh`, the `*_u_lower_kmh` variants and the per-term breakdown.
 
 The margin is a model of the known error sources. It can't see what it doesn't
 model: a wrong `capture_fps`, a mis-measured distance beyond its tolerance, or
-lens distortion. **Only a field validation proves it.** On the Results screen,
+lens distortion. **Only a field validation proves it.** In Review,
 **Validation run** takes reference speeds, from a GPS logger's average over A→B
 or a cruise-control speed, for specific vehicles (by track number or by time in
 the clip). The app matches them to the measured vehicles and reports the bias,

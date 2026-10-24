@@ -78,7 +78,7 @@ function cut(rs: Range[], [a, b]: Range, n: number): Range[] {
 const inside = (rs: Range[], f: number) => rs.some(([a, b]) => f >= a && f < b);
 
 /** A Premiere-like timeline of the clip: ruler, frame thumbnails, the activity scan, the parts
- * to analyse (drag to add or cut out, drag edges, I / O keys) and, on the results, the vehicles.
+ * to analyse (drag to add or cut out, drag edges, I / O keys) and, in Review and Export, the vehicles.
  * Wheel zooms around the cursor, Shift+wheel pans. Frames are video frames; times are real
  * seconds (frame / capture fps). */
 export default function Timeline({ project, frame, onSeek, onProjectChange, editable = true, vehicles, selectedVehicle, onPickVehicle,

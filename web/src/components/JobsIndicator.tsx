@@ -64,7 +64,7 @@ export default function JobsIndicator() {
         <div className="jobs-ind-menu">
           <div className="muted small">{slots} jobs at a time · one analysis on the GPU · one job per project</div>
           {jobs.map((j) => (
-            <a key={j.id} className="jobs-ind-row" href={`#/p/${j.project_id}/${j.kind === "render" ? "export" : j.kind === "proxy" ? "import" : "process"}`}>
+            <a key={j.id} className="jobs-ind-row" href={`#/p/${j.project_id}/${j.kind === "render" ? "export" : j.kind === "proxy" ? "import" : "analyze"}`}>
               <div className="row small">
                 <span className="grow ellipsis">{j.project_name}</span>
                 <span className="muted">{LABEL[j.kind] ?? j.kind}</span>

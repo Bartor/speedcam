@@ -257,6 +257,16 @@ def test_tracking_only_then_calibrate_and_recompute(tmp_path):
     assert res["stats_max"]["n_valid"] == 1
     assert res["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)
 
+    # Review says what changed in the setup since: a Recompute applies speed checks, a new
+    # analysis the detector; the speed limit is only how results are shown
+    assert res["stale"] == {"recompute": False, "analysis": False}
+    client.patch(f"/api/projects/{pid}", json={"render": {"speed_limit_kmh": 30}})
+    assert client.get(f"/api/projects/{pid}/results").json()["stale"] == {"recompute": False, "analysis": False}
+    client.patch(f"/api/projects/{pid}", json={"speed": {"max_gap_s": 0.4}})
+    assert client.get(f"/api/projects/{pid}/results").json()["stale"] == {"recompute": True, "analysis": False}
+    client.patch(f"/api/projects/{pid}", json={"detection": {"conf": 0.3}})
+    assert client.get(f"/api/projects/{pid}/results").json()["stale"]["analysis"] is True
+
 
 @pytest.mark.slow
 def test_vehicle_names_merges_looks_and_render_preview(tmp_path):

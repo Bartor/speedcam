@@ -1,22 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, Project } from "./api";
 import ImportScreen from "./screens/ImportScreen";
-import CalibrateScreen from "./screens/CalibrateScreen";
-import ProcessScreen from "./screens/ProcessScreen";
-import ResultsScreen from "./screens/ResultsScreen";
+import SetupScreen from "./screens/SetupScreen";
+import AnalyzeScreen from "./screens/AnalyzeScreen";
+import ReviewScreen from "./screens/ReviewScreen";
 import ExportScreen from "./screens/ExportScreen";
 import JobsIndicator from "./components/JobsIndicator";
 import JobsPage from "./screens/JobsPage";
 import Tutorial, { tutorialPending } from "./components/Tutorial";
-
-export type Screen = "import" | "calibrate" | "process" | "results" | "export";
-const SCREENS: { key: Screen; label: string }[] = [
-  { key: "import", label: "Import" },
-  { key: "calibrate", label: "Calibrate" },
-  { key: "process", label: "Process" },
-  { key: "results", label: "Results" },
-  { key: "export", label: "Export" },
-];
+import { Screen, SCREENS, screenOf } from "./steps";
 
 /** Which steps already have their output, so the nav reads as a progression. */
 function stepDone(p: Project | null, s: Screen): boolean {
@@ -24,12 +16,12 @@ function stepDone(p: Project | null, s: Screen): boolean {
   const c = p.config.calibration;
   switch (s) {
     case "import": return true;
-    case "calibrate": {
+    case "setup": {
       const rules = (c.red_lights ?? []).some((r) => r.stop_lines.some((l) => l.points.length >= 2)) || (c.solid_lines ?? []).some((l) => l.points.length >= 2);
       return !!(((c.paths ?? []).some((pp) => pp.points.length >= 2) || (c.line_a && c.line_b) || rules) && !p.calibration_result.error && p.calibration_result.fit_ok !== false);
     }
-    case "process": return !!p.status.results_json;
-    case "results": return !!p.status.results_json;
+    case "analyze": return !!p.status.results_json;
+    case "review": return !!p.status.results_json;
     case "export": return !!p.status.render_mp4;
   }
 }
@@ -47,8 +39,7 @@ function parseHash(): { id: string | null; screen: Screen; jobs?: boolean } {
   if (window.location.hash.startsWith("#/jobs")) return { id: null, screen: "import", jobs: true };
   const m = window.location.hash.match(/^#\/p\/([a-z0-9-]+)(?:\/(\w+))?/);
   if (!m) return { id: null, screen: "import" };
-  const s = (m[2] as Screen) || "import";
-  return { id: m[1], screen: SCREENS.some((x) => x.key === s) ? s : "import" };
+  return { id: m[1], screen: screenOf(m[2]) };
 }
 
 export default function App() {
@@ -93,7 +84,7 @@ export default function App() {
                 <li key={s.key} className={done ? "done" : ""}>
                   <button className={`step${active ? " active" : ""}${done ? " done" : ""}`} aria-current={active ? "step" : undefined}
                     disabled={(!p && s.key !== "import") || (s.key === "export" && !!p && !p.status.results_json)}
-                    title={s.key === "export" && p && !p.status.results_json ? "Analyse the clip first" : s.label} onClick={() => go(s.key)}>
+                    title={s.key === "export" && p && !p.status.results_json ? "Analyse the clip first" : s.title} onClick={() => go(s.key)}>
                     <span className="step-num">{done && !active ? "✓" : i + 1}</span><span className="step-label">{s.label}</span>
                   </button>
                 </li>
@@ -111,11 +102,11 @@ export default function App() {
         {route.jobs && <JobsPage />}
         {!route.jobs && route.screen === "import" && (
           <ImportScreen project={p} onProject={(np) => { setProject(np); go("import", np.id); }}
-            onChanged={setProject} onNext={() => go("calibrate")} />
+            onChanged={setProject} onNext={() => go("setup")} />
         )}
-        {p && route.screen === "calibrate" && <CalibrateScreen project={p} onChanged={setProject} onNext={() => go("process")} />}
-        {p && route.screen === "process" && <ProcessScreen project={p} onChanged={setProject} onDone={() => go("results")} />}
-        {p && route.screen === "results" && <ResultsScreen project={p} onChanged={setProject} onExport={() => go("export")} />}
+        {p && route.screen === "setup" && <SetupScreen project={p} onChanged={setProject} onNext={() => go("analyze")} />}
+        {p && route.screen === "analyze" && <AnalyzeScreen project={p} onChanged={setProject} onDone={() => go("review")} onSetup={() => go("setup")} />}
+        {p && route.screen === "review" && <ReviewScreen project={p} onChanged={setProject} onExport={() => go("export")} onSetup={() => go("setup")} />}
         {p && route.screen === "export" && <ExportScreen project={p} onChanged={setProject} />}
       </main>
       <Tutorial open={tutorial} onClose={() => setTutorial(false)} />

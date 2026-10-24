@@ -53,7 +53,7 @@ export const HELP: Record<string, { title: string; body: string[] }> = {
     title: "Analysis",
     body: [
       "Detects vehicles on every frame (GPU), aligns frames to the reference (stabilization), tracks each vehicle and measures it. It takes roughly the clip's length to a few times it.",
-      "After it, changing lines, paths, lights or thresholds only needs Recompute on the results: no new analysis.",
+      "After it, changing anything in Setup (scale, paths, lights, limits, tolerances) only needs Recompute in Review: no new analysis.",
     ],
   },
   "process.activity": {
@@ -105,7 +105,25 @@ export const HELP: Record<string, { title: string; body: string[] }> = {
   },
   "results.violations": {
     title: "Violations",
-    body: ["Red-light runs and solid-line crossings, with the light's phase timeline. Click a row to watch it. Change the lines or settings on the Calibrate screen, then Recompute."],
+    body: ["Red-light runs and solid-line crossings, with the light's phase timeline. Click a row to watch it. Change the lines or their settings in Setup → Rules, then Recompute."],
+  },
+  "setup.tolerances": {
+    title: "Tolerances",
+    body: [
+      "How well the calibration inputs are known: each typed distance (tape ~2 cm, orthophoto ~10 cm) and each click. Every speed's margin of error comes from them (Monte Carlo over these tolerances) and the tracking noise.",
+      "The drone height (from the flight log) bounds the height-parallax bias: vehicle tops are closer to the camera than the road, so speeds read slightly high. Without it that bias isn't in the margin.",
+    ],
+  },
+  "setup.limit": {
+    title: "Speed limit",
+    body: ["Used everywhere a speed is judged: vehicles over the limit in Review, the red line on the speed graphs, and the colours in the rendered video (green up to the limit, amber up to 10 km/h over, red beyond)."],
+  },
+  "setup.checks": {
+    title: "When a measurement counts",
+    body: [
+      "A vehicle's max speed comes only from cleanly tracked frames: it needs at least the clean tracking time set here. A detection gap or a jump in position makes the average over the stretch inconclusive; the max still stands.",
+      "The momentary speed (the max and the graphs) is measured over a short window: shorter follows changes faster but is noisier.",
+    ],
   },
   "results.vehicle": {
     title: "Vehicle",

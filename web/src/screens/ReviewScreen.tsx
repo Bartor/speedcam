@@ -3,7 +3,6 @@ import Timeline from "../components/Timeline";
 import Help from "../components/Help";
 import "../components/speed-profile.css";
 import { api, fmt, margin, marginBreakdown, MergeCandidates, Project, Results, Stats, useVideoFrame, Vehicle } from "../api";
-import MarginPanel from "../components/MarginPanel";
 import ValidationPanel from "../components/ValidationPanel";
 import Histogram from "../components/Histogram";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
@@ -12,7 +11,7 @@ import ViolationsPanel from "../components/ViolationsPanel";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
 import { SortBy, SplitsPanel, VehicleCard, VehicleList } from "../components/Vehicles";
 
-interface Props { project: Project; onChanged: (p: Project) => void; onExport: () => void }
+interface Props { project: Project; onChanged: (p: Project) => void; onExport: () => void; onSetup: () => void }
 
 type SortKey = keyof Vehicle;
 const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
@@ -32,10 +31,12 @@ const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "accel_mps2", label: "a m/s²", d: 2 },
 ];
 
-/** Results as a dashboard: the clip with the vehicle list beside it, the selected vehicle's speed
+/** Review, as a dashboard: the clip with the vehicle list beside it, the selected vehicle's speed
  * along the section and its card below, then the statistics, violations and margins. Rendering
  * and downloads are on the Export screen. */
-export default function ResultsScreen({ project, onChanged, onExport }: Props) {
+type Tab = "speeds" | "violations" | "splits" | "table" | "validation";
+
+export default function ReviewScreen({ project, onChanged, onExport, onSetup }: Props) {
   const [res, setRes] = useState<Results | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [dir, setDir] = useState<"all" | "A->B" | "B->A">("all");
@@ -51,6 +52,8 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
   const [metric, setMetric] = useState<"max" | "avg">("max");
   const [cands, setCands] = useState<MergeCandidates | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>(() => { try { return (localStorage.getItem("speedcam.review.tab") as Tab) || "speeds"; } catch { return "speeds"; } });
+  const pickTab = (k: Tab) => { setTab(k); try { localStorage.setItem("speedcam.review.tab", k); } catch { /* private mode */ } };
 
   const extras = () => {
     api.overlay(project.id).then(setOverlay).catch(() => setOverlay(null));
@@ -136,19 +139,28 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
   const nValid = res.vehicles.filter((v) => v.valid).length;
   const nOver = res.vehicles.filter((v) => v.valid && v.speed_max_kmh > limit).length;
   const nViol = (res.violations?.n_red_light ?? 0) + (res.violations?.n_solid_line ?? 0);
+  const nSplits = cands?.pairs.filter((p) => p.likely).length;
+  const tabs: { key: Tab; label: string; count?: number; bad?: boolean }[] = [
+    { key: "speeds", label: "Speeds" },
+    ...(res.violations ? [{ key: "violations" as Tab, label: "Violations", count: nViol, bad: nViol > 0 }] : []),
+    { key: "splits", label: "Possibly split", count: nSplits },
+    { key: "table", label: "All measurements", count: res.vehicles.length },
+    { key: "validation", label: "Validation run" },
+  ];
+  if (!tabs.some((x) => x.key === tab)) setTimeout(() => setTab("speeds"), 0);
   const noPathOrLines = !(project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) && !(project.config.calibration.line_a && project.config.calibration.line_b);
 
   const empty = (
     <div className="banner warn small">
       {res.vehicles.length === 0 && res.calibration?.method === "none" ? (
-        <>Tracking only: {res.run.tracks ?? 0} vehicles were tracked, but there's no usable calibration, so nothing was measured. Calibrate and draw a path or lines, then press Recompute.</>
+        <>Tracking only: {res.run.tracks ?? 0} vehicles were tracked, but there's no usable calibration, so nothing was measured. Calibrate and draw a path or lines in Setup, then press Recompute.</>
       ) : res.vehicles.length === 0 && noPathOrLines ? (
-        <>No speeds measured: {res.run.tracks ?? 0} vehicles were tracked, but there's no path or lines A/B to measure them on. Draw them on the Calibrate screen, then press Recompute.</>
+        <>No speeds measured: {res.run.tracks ?? 0} vehicles were tracked, but there's no path or lines A/B to measure them on. Draw them in Setup, then press Recompute.</>
       ) : <>No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.</>}
       {res.vehicles.length === 0 && res.calibration?.method !== "none" && !noPathOrLines && res.run.tracks !== undefined && <> Detector: {res.run.detections_per_frame?.toFixed(1)} detections/frame,
         {" "}{res.run.tracks} tracks ({res.run.tracks_long_enough} long enough): {res.run.tracks_crossing_a_only} crossed only A,
         {" "}{res.run.tracks_crossing_b_only} only B, {res.run.tracks_crossing_neither} neither.
-        {res.run.detections_per_frame < 1 ? " Very few detections: try another model or tiling (Process → Preview tracking)." :
+        {res.run.detections_per_frame < 1 ? " Very few detections: try another model or tiling (Analyze → Preview tracking)." :
           " Check that lines A and B span every lane the vehicles use (watch the overlay)."}</>}
     </div>
   );
@@ -156,7 +168,7 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
   return (
     <div className="dash">
       <div className="dash-head">
-        <h2>Results</h2>
+        <h2>Review</h2>
         <span className="tag">{nValid} valid of {res.vehicles.length}</span>
         {res.vehicles.length > 0 && <span className={`tag ${nOver ? "bad" : ""}`}>{nOver} over {limit} km/h</span>}
         {res.stats_max?.p85 !== undefined && <span className="tag">p85 {fmt(res.stats_max.p85)} km/h</span>}
@@ -165,6 +177,15 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
         <button onClick={recompute} disabled={!!busy} title="Re-run speeds and violation checks from stored tracks (after editing lines, lights, calibration or thresholds). Lights added or moved since the analysis are read from the video, which takes a minute.">Recompute</button>
         <button className="primary" onClick={onExport} title="Render the annotated video, download the data">Export →</button>
       </div>
+      {res.stale?.recompute && (
+        <div className="banner info small row">
+          <span className="grow">The setup changed since these results were computed (scale, paths, limits, rules or tolerances).</span>
+          <button className="primary" disabled={!!busy} onClick={recompute}>Recompute</button>
+        </div>
+      )}
+      {res.stale?.analysis && (
+        <div className="banner info small">Analysis settings (detector, camera, the parts analysed) changed since this analysis: they apply when you analyse again.</div>
+      )}
       {res.calibration_check?.status === "suspect" && (
         <div className="banner warn small calib-check"><b>Check the calibration.</b> {res.calibration_check.message}</div>
       )}
@@ -208,49 +229,59 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
         </div>
       )}
 
-      <div className="dash-grid">
-        <section className="panel">
-          <div className="panel-head">
-            <h3>Speed statistics<Help topic="results.stats" /></h3>
-            {road !== "all" ? <span className="tag">{road}</span> : dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
-            <span className="grow" />
-            {res.stats_max && (
-              <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
-                <button className={useMax ? "active" : ""} onClick={() => setMetric("max")}>Max</button>
-                <button className={!useMax ? "active" : ""} onClick={() => setMetric("avg")}>Average</button>
+      <section className="panel review-tabs">
+        <div className="rt-bar" role="tablist" aria-label="More about the results">
+          {tabs.map((tb) => (
+            <button key={tb.key} role="tab" aria-selected={tab === tb.key} className={`rt-tab${tab === tb.key ? " active" : ""}`} onClick={() => pickTab(tb.key)}>
+              {tb.label}{tb.count !== undefined && <span className={`tag${tb.bad ? " bad" : ""}`}>{tb.count}</span>}
+            </button>
+          ))}
+          <span className="grow" />
+          {tab === "speeds" && res.stats_max && (
+            <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
+              <button className={useMax ? "active" : ""} onClick={() => setMetric("max")}>Max</button>
+              <button className={!useMax ? "active" : ""} onClick={() => setMetric("avg")}>Average</button>
+            </div>
+          )}
+        </div>
+
+        {tab === "speeds" && (
+          <div className="rt-speeds">
+            <div>
+              <div className="stat-row">
+                <Stat label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${road !== "all" ? res.vehicles.filter((v) => v.path === road).length
+                  : dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
+                <Stat label="Mean" unit="km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
+                <Stat label="85th percentile" unit="km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
+                <Stat label="95th percentile" unit="km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
+                <Stat label="Standard deviation" unit="km/h" value={fmt(stats?.sd, 2)} />
+                <Stat label={`Needed for p85 ±${stats?.permitted_error_kmh}`} value={reqN !== undefined ? String(reqN) : "–"}
+                  note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ enough" : `${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2"}
+                  tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />
               </div>
-            )}
+              <p className="footnote">{road !== "all" ? `${road} · ` : dir !== "all" ? `${dir.replace("->", " → ")} · ` : ""}
+                {useMax ? "Per vehicle: its highest momentary speed, from cleanly tracked frames." : "Per vehicle: its average A→B, where conclusive."}
+                {" "}{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals (t for the mean, bootstrap for percentiles); "needed" is the ITE spot-speed sample size.</p>
+              <MarginSummary res={res} onSetup={onSetup} />
+            </div>
+            <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
           </div>
-          <div className="tiles">
-            <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${road !== "all" ? res.vehicles.filter((v) => v.path === road).length
-              : dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
-            <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
-              note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ sample sufficient" : `✕ need ${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2 vehicles"}
-              tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />
-            <Tile label="Mean" unit="km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `CI ${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
-            <Tile label="Standard deviation σ" unit="km/h" value={fmt(stats?.sd, 2)} />
-            <Tile label="85th percentile" unit="km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `CI ${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
-            <Tile label="95th percentile" unit="km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `CI ${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
-          </div>
-          <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
-          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines, from cleanly tracked frames." : "Per vehicle: average speed from line A to line B, only where it's conclusive (no detection gap or jump)."}
-            {" "}{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
-        </section>
-        {res.violations && (
+        )}
+
+        {tab === "violations" && res.violations && (
           <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
             onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
             hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
             solidMode={(project.config.violations as any)?.solid_mode ?? "wheels"}
             minDuration={(project.config.violations as any)?.min_duration_s ?? 0.5} />
         )}
-        {cands && <SplitsPanel cands={cands} busy={busy} onMerge={merge} onSeek={seekTime} />}
-        <MarginPanel project={project} res={res} onProject={onChanged} onRecomputed={gotResults} />
-      </div>
 
-      {res.vehicles.length > 0 && (
-        <details className="panel all-table">
-          <summary><h3>All measurements</h3><span className="tag">{tableRows.length}</span>
-            <span className="muted small">every column, sortable · the same filter as the list</span></summary>
+        {tab === "splits" && (!cands ? <p className="muted small">Looking for vehicles the tracker split in two…</p>
+          : nSplits ? <SplitsPanel cands={cands} busy={busy} onMerge={merge} onSeek={seekTime} />
+            : <p className="muted small">No vehicle looks split in two: no track starts where another one ended, heading the same way at the same speed.
+              Pick a vehicle to merge one by its number.</p>)}
+
+        {tab === "table" && (
           <div className="table-wrap">
             <table className="vehicles">
               <thead>
@@ -287,28 +318,46 @@ export default function ResultsScreen({ project, onChanged, onExport }: Props) {
                         {v.valid && v.avg_valid === false && <span className="status warn" title={`${v.flags}: the average over the stretch is inconclusive; the max comes from the ${Math.round(v.max_clean_pct ?? 0)} % of it tracked cleanly`}>avg inconclusive</span>}
                         {v.valid && v.avg_valid !== false && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}
                         {(v.merged?.length ?? 0) > 1 && <span className="status" title="Measured as one vehicle from these tracks">⧉ {v.merged!.join("+")}</span>}
-                        {v.violations?.map((x) => <span key={x} className="status bad" title="Violation (see Violations)">⛔ {x}</span>)}</td>
+                        {v.violations?.map((x) => <span key={x} className="status bad" title="Violation">⛔ {x}</span>)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-            {res.uncertainty && <p className="footnote">(± %) = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias). Hover a speed for its breakdown.</p>}
+            {res.uncertainty && <p className="footnote">Every column, sortable, with the list's filter. (± %) = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias). Hover a speed for its breakdown.</p>}
           </div>
-        </details>
-      )}
+        )}
 
-      <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
+        {tab === "validation" && (
+          <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
+        )}
+      </section>
     </div>
   );
 }
 
-function Tile({ label, value, unit, note, tone }: { label: string; value: string; unit?: string; note?: string; tone?: "ok" | "bad" }) {
+function Stat({ label, value, unit, note, tone }: { label: string; value: string; unit?: string; note?: string; tone?: "ok" | "bad" }) {
   return (
-    <div className="tile">
-      <div className="tile-label">{label}</div>
-      <div className="tile-value">{value}{unit && value !== "–" && <span className="tile-unit">{unit}</span>}</div>
-      {note && <div className={`tile-note ${tone ? `${tone}-text` : ""}`}>{note}</div>}
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}{unit && value !== "–" && <span className="stat-unit">{unit}</span>}</div>
+      {note && <div className={`stat-note ${tone ? `${tone}-text` : ""}`}>{note}</div>}
+    </div>
+  );
+}
+
+/** What the speeds' margins of error cover; the inputs are in Setup. */
+function MarginSummary({ res, onSetup }: { res: Results; onSetup: () => void }) {
+  const u = res.uncertainty;
+  if (!u) return <div className="banner info small">These results predate the margin of error: press Recompute to add it.</div>;
+  return (
+    <div className="margin-sum small">
+      <span title="Median 95 % margin of error of the valid vehicles' max speeds">Margin of error <b>±{fmt(u.median_u_pct, 1)} %</b> typical</span>
+      <span title="How well the redundant check distances agree, relative to the declared tolerances">
+        {u.fit_ratio === null ? <span className="warn-text">no check distance</span> : <>check fit {fmt(u.fit_ratio, 2)}{u.fit_inflation > 1 ? " (widened)" : ""}</>}</span>
+      <span className={u.parallax === "bounded" ? "" : "warn-text"} title="Vehicle tops are closer to the camera than the road, so speeds read slightly high. Bounded once the drone height is known.">
+        height parallax {u.parallax === "bounded" ? "bounded" : "not bounded (no drone height)"}</span>
+      <button className="link" onClick={onSetup}>tolerances in Setup →</button>
     </div>
   );
 }

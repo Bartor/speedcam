@@ -404,6 +404,11 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         if not p.exists():
             raise HTTPException(404, "no results yet")
         data = json.loads(p.read_text(encoding="utf-8"))
+        from ..pipeline import settings_keys
+
+        # what changed in the setup since these results: "recompute" settings, or "analysis" ones
+        was, now = data.get("settings"), settings_keys(store.config(pid))
+        data["stale"] = {k: was.get(k) != v for k, v in now.items()} if was else None
         r = d / "render.json"
         data["render"] = json.loads(r.read_text(encoding="utf-8")) if (d / "render.mp4").exists() and r.exists() else None
         return data

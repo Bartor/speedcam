@@ -98,7 +98,7 @@ export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, h
               <span className="muted">{e.over_m.toFixed(2)} m over for {e.for_s} s, at {e.t_s.toFixed(1)} s</span>
             </button>
           ))}
-          <p className="footnote">Reported from {v.overlap_m ?? "–"} m over for {minDuration} s (Calibrate → Solid lines). The outline comes from the
+          <p className="footnote">Reported from {v.overlap_m ?? "–"} m over for {minDuration} s (Setup → Rules). The outline comes from the
             detection box and the class's usual width, so expect ± 0.1-0.2 m; in a view at an angle the box also holds the vehicle's side.</p>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { screenOf } from "../steps";
 import { api, fmt, LibraryProject, timeAgo } from "../api";
 import { ActiveJob, pct, useActiveJobs } from "./JobsIndicator";
 
@@ -47,7 +48,7 @@ const sameFile = (a: string, b: string) => a.replace(/\//g, "\\").toLowerCase() 
 
 function Card({ p, job, onDelete, twins }: { p: LibraryProject; job?: ActiveJob; onDelete: () => void; twins: number }) {
   const [thumbOk, setThumbOk] = useState(true);
-  const screen = p.last_screen ?? (p.has_results ? "results" : p.calibrated ? "process" : "calibrate");
+  const screen = p.last_screen ? screenOf(p.last_screen) : p.has_results ? "review" : p.calibrated ? "analyze" : "setup";
   const open = () => (window.location.hash = `#/p/${p.id}/${screen}`);
   const file = p.source.split(/[\\/]/).pop();
   return (

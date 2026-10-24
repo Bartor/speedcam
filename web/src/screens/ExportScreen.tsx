@@ -11,13 +11,13 @@ type Settings = {
   mode: string; output_fps: number | null; playback_speed: number; scale: number; lut: string; encoder: string; quality: number;
   trail_s: number; label_hold_s: number; label_position: string; only_parts: boolean; ranges: Range[] | null;
   show_lines: boolean; show_rules: boolean; show_boxes: boolean; show_trails: boolean; show_labels: boolean; show_names: boolean;
-  show_unmeasured: boolean; show_hud: boolean; show_margin: boolean; speed_limit_kmh: number;
+  show_unmeasured: boolean; show_hud: boolean; show_margin: boolean;
   panel: string; panel_layout: string; panel_width: number; panel_sort: string; panel_rows: number;
   title: string; subtitle: string; footer: string;
 };
 const KEYS: (keyof Settings)[] = ["mode", "output_fps", "playback_speed", "scale", "lut", "encoder", "quality", "trail_s", "label_hold_s",
   "label_position", "only_parts", "ranges", "show_lines", "show_rules", "show_boxes", "show_trails", "show_labels", "show_names",
-  "show_unmeasured", "show_hud", "show_margin", "speed_limit_kmh", "panel", "panel_layout", "panel_width", "panel_sort", "panel_rows",
+  "show_unmeasured", "show_hud", "show_margin", "panel", "panel_layout", "panel_width", "panel_sort", "panel_rows",
   "title", "subtitle", "footer"];
 type Preset = "whole" | "parts" | "vehicles" | "violations" | "custom";
 
@@ -327,8 +327,8 @@ export default function ExportScreen({ project, onChanged }: Props) {
                 <option value="above">above the vehicle</option><option value="below">below the vehicle</option>
                 <option value="left">left of the vehicle</option><option value="right">right of the vehicle</option>
               </select>
-              <label title="Speeds above it are amber, 10 km/h above it red">Speed limit</label>
-              <input type="number" value={s.speed_limit_kmh} onChange={(e) => set("speed_limit_kmh", +e.target.value)} />
+              <label title="Speeds above it are amber, 10 km/h above it red. Set in Setup → Limits & tolerances.">Speed limit</label>
+              <span className="muted">{(project.config.render as any).speed_limit_kmh ?? 50} km/h · set in Setup</span>
               <label title="How long a vehicle keeps its max label after the second line">Label stays</label>
               <select value={String(s.label_hold_s)} onChange={(e) => set("label_hold_s", +e.target.value)}>
                 {![1, 2.5, 5, 10].includes(s.label_hold_s) && <option value={String(s.label_hold_s)}>{s.label_hold_s} s</option>}

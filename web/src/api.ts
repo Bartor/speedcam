@@ -213,6 +213,8 @@ export interface Results {
   calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
   violations?: Violations | null;
   run: Record<string, any>; calibration: CalibrationResult;
+  /** what changed in the setup since these results: a Recompute applies "recompute"; "analysis" needs a new analysis */
+  stale?: { recompute: boolean; analysis: boolean } | null;
   render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string;
     width?: number; height?: number; frames?: number; parts?: [number, number][] | null } | null;
 }

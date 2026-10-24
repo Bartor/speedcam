@@ -409,6 +409,24 @@ def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal,
                                 cfg.speed.momentary_window_s)
 
 
+def settings_keys(cfg: ProjectConfig) -> dict[str, str]:
+    """Hashes of the settings results depend on: "recompute" (a Recompute applies them: calibration,
+    speed checks, margins, rules, merges) and "analysis" (only a new analysis does: detection,
+    tracking, stabilization, the parts analysed). Review compares them with the current setup."""
+    import hashlib
+
+    def h(*parts) -> str:
+        return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+    d = cfg.model_dump(mode="json")
+    return {
+        "recompute": h(d["calibration"], d["speed"], d["uncertainty"], d["violations"], d["vehicles"], d["stats"],
+                       d["capture_fps"]),
+        "analysis": h(d["detection"], d["tracking"], d["flow"], d["stabilization"], d["parts"], d["start_frame"],
+                      d["end_frame"], d["capture_fps"]),
+    }
+
+
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
                   timing_msgs: list[str], budget: Optional[dict], viol: Optional[dict], run: dict) -> dict:
     cols = ["track_id", "name", "merged", "class", "path", "direction", "coverage_pct", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
@@ -470,6 +488,7 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
             for name in [p.name for p in cfg.calibration.paths if len(p.points) >= 2]
         },
         "calibration_check": calibration_check(results),
+        "settings": settings_keys(cfg),
         "uncertainty": budget,
         "violations": viol,
         "vehicles": results,
