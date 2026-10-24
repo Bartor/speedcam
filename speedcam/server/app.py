@@ -28,6 +28,18 @@ VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts"}
 STATIC = Path(__file__).parent / "static"
 
 
+class UIFiles(StaticFiles):
+    """The built web UI. index.html must never be reused from the browser cache without asking
+    (it names the current app code); the files in assets/ have content hashes in their names,
+    so they can be kept for good."""
+
+    async def get_response(self, path: str, scope) -> Any:
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+                                         if path.replace("\\", "/").startswith("assets/") else "no-cache")
+        return resp
+
+
 class CreateProject(BaseModel):
     source: str
     name: Optional[str] = None
@@ -549,7 +561,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
 
     # -- web UI ------------------------------------------------------------------
     if (STATIC / "index.html").exists():
-        app.mount("/", StaticFiles(directory=STATIC, html=True), name="ui")
+        app.mount("/", UIFiles(directory=STATIC, html=True), name="ui")
     else:
         @app.get("/", response_class=HTMLResponse)
         def no_ui():

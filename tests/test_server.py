@@ -256,3 +256,21 @@ def test_tracking_only_then_calibrate_and_recompute(tmp_path):
     res = client.post(f"/api/projects/{pid}/recompute").json()
     assert res["stats_max"]["n_valid"] == 1
     assert res["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)
+
+
+def test_ui_cache_headers(tmp_path):
+    """index.html is always revalidated (it names the current app code); hashed assets are
+    cached for good. Without this a browser kept showing an old UI after an update."""
+    from speedcam.server.app import STATIC
+
+    if not (STATIC / "index.html").exists():
+        pytest.skip("web UI not built")
+    client = TestClient(create_app(tmp_path / "projects"))
+    r = client.get("/")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    asset = next((STATIC / "assets").glob("*.js")).name
+    r = client.get(f"/assets/{asset}")
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+    # a revalidation of an unchanged index.html is a cheap 304
+    r2 = client.get("/", headers={"If-None-Match": client.get("/").headers["etag"]})
+    assert r2.status_code == 304
