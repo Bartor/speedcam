@@ -201,8 +201,13 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    it). Drag on the bottom lane to cut a stretch out (starting over blue) or add one back
    (starting elsewhere), drag a part's edge to adjust it, or press **I** and **O** at the
    playhead for in and out points. *Use activity* takes the scan's parts, *Analyse all*
-   the whole clip. Wheel zooms around the cursor, Shift+wheel pans, arrow keys step
-   frames.
+   the whole clip. The video has its own controls (frame steps, real-time readout,
+   speed, full screen) and Premiere-style keys: **Space** plays and pauses, **K** / **L**
+   pause and play (L again: faster), **←** / **→** step a frame (with Shift, a second),
+   **Home** / **End** go to the start and end. On the timeline the wheel scrolls along it
+   when zoomed in, **Alt** or **Ctrl**+wheel zooms at the cursor, **Shift**+wheel moves
+   the playhead frame by frame; **+** / **−** zoom at the playhead and **\\** fits the
+   whole clip. **?** (or the *Shortcuts* button) lists them all.
 2. **Calibrate:** choose a reference frame. For any view that isn't straight down,
    use **Polygon**: click 4+ flat ground points, then type measured sides and
    diagonals. A polygon with N corners needs 2N−3 distances to fix its shape (a

@@ -541,3 +541,14 @@ table.vehicles tr.invalid td.strong { color: var(--muted); font-weight: 600; }
 .clip-preview { display: flex; flex-direction: column; gap: 6px; margin: var(--s-2) 0; }
 .clip-video:not(.rotated) video { display: block; max-height: 240px; max-width: 100%; margin: 0 auto; border-radius: var(--r-md); background: #000; }
 .clip-video.rotated .rot-box { width: 100%; height: 240px; border-radius: var(--r-md); }
+.video-controls { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.video-controls .vc-btn { min-width: 30px; min-height: 26px; padding: 0 6px; font-size: 13px; line-height: 1; }
+.video-controls .vc-play { min-width: 40px; background: var(--surface-3, var(--surface-2)); border: 1px solid var(--border-strong); }
+.video-controls .vc-time { font-variant-numeric: tabular-nums; font-size: var(--fs-sm); margin-left: 6px; white-space: nowrap; }
+.video-controls .vc-rate { width: auto; min-height: 26px; padding: 0 4px; }
+.video-wrap:fullscreen, .clip-video:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; }
+.video-wrap:fullscreen video { max-height: 100vh; width: 100%; }
+.tl-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px 16px; padding: 8px 10px; background: var(--inset); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-sm); }
+.tl-keys div { display: flex; gap: 8px; align-items: baseline; }
+.tl-keys kbd { min-width: 120px; color: var(--text); font-family: inherit; font-weight: 600; }
+.tl-keys span { color: var(--text-2); }

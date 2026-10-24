@@ -39,6 +39,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   const [validOnly, setValidOnly] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: "t_entry_s", asc: true });
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
   const [source, setSource] = useState<"render" | "proxy">("proxy");
   const [showOverlay, setShowOverlay] = useState(true);
   const [overlay, setOverlay] = useState<OverlayData | null>(null);
@@ -131,12 +132,15 @@ export default function ResultsScreen({ project, onChanged }: Props) {
   return (
     <div className="results">
       <div className="res-left">
-        <div className={`video-wrap${viewRot ? " rotated" : ""}`}>
-          <RotatedVideo key={useRender ? "r" : "p"} rotation={viewRot} videoRef={setVideo} controls muted playsInline preload="auto"
+        <div ref={setWrapEl} className={`video-wrap${viewRot ? " rotated" : ""}`}>
+          <RotatedVideo key={useRender ? "r" : "p"} rotation={viewRot} videoRef={setVideo} muted playsInline preload="auto"
+            onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }}
             src={useRender ? `${api.fileUrl(project.id, "render.mp4")}?v=${res.render!.file}${rjob.end?.id ?? ""}` : api.proxyUrl(project.id)} />
           {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} rotation={viewRot} />}
         </div>
-        {viewRot !== 0 && <VideoControls video={video} />}
+        <VideoControls video={video} seekBar={useRender} fullscreenEl={wrapEl}
+          containerFps={useRender ? res.render!.output_fps : project.info.container_fps}
+          realTime={(t) => (useRender ? t * res.render!.playback_speed : (t * project.info.container_fps) / fps)} />
         {!useRender && (
           <Timeline project={project} frame={frame} onProjectChange={onChanged}
             onSeek={(f) => { if (video) { video.pause(); video.currentTime = (f + 0.5) / project.info.container_fps; } }}

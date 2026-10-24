@@ -1,6 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, Project, rotSize, ScanResult } from "../api";
 import { useActiveJobs } from "./JobsIndicator";
+import { typing } from "./RotatedVideo";
+
+/** Every shortcut on a screen with a timeline (the player's and the timeline's own). */
+export const SHORTCUTS: [string, string][] = [
+  ["Space", "Play / pause"],
+  ["K / L", "Pause / play (L again: faster)"],
+  ["← / →", "Previous / next frame"],
+  ["Shift + ← / →", "One second back / forward"],
+  ["Home / End", "Start / end of the clip"],
+  ["Wheel", "Scroll along the timeline (when zoomed in)"],
+  ["Alt or Ctrl + wheel", "Zoom in / out at the cursor"],
+  ["Shift + wheel", "Move the playhead frame by frame"],
+  ["+ / −", "Zoom in / out at the playhead"],
+  ["\\", "Fit the whole clip"],
+  ["I / O", "In point / out point: adds that range to the analysis"],
+  ["Drag on the parts lane", "Cut out (starting over blue) or add back (elsewhere)"],
+  ["?", "Show these shortcuts"],
+];
 
 export interface TimelineVehicle { id: number; f0: number; f1: number; valid: boolean; label?: string }
 
@@ -264,7 +282,6 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
     const f = fAt(px);
     const where = laneAt(py);
     try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* synthetic or already released */ }
-    wrap.current?.focus();
     if (where === "parts" && editable) {
       const allIn = parts.length === 1 && parts[0][0] <= 0 && parts[0][1] >= nb;
       if (!allIn) {
@@ -308,26 +325,42 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
     } else if (d.kind === "edge") commit(parts);
   };
 
-  // wheel: zoom around the cursor; Shift (or a sideways trackpad swipe) pans
+  // wheel, as in Premiere: scroll along the timeline; Alt or Ctrl zooms at the cursor; Shift
+  // moves the playhead frame by frame. With the whole clip in view the wheel scrolls the page.
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+  const seekRef = useRef(onSeek);
+  seekRef.current = onSeek;
   useEffect(() => {
     const c = canvas.current;
     if (!c) return;
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
       const [px] = local(e);
+      const dy = e.deltaY || e.deltaX;  // Shift+wheel arrives as deltaX in some browsers
+      if (e.shiftKey) {
+        e.preventDefault();
+        seekRef.current(Math.max(0, Math.min(nb - 1, frameRef.current + (dy > 0 ? 1 : -1))));
+        return;
+      }
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        e.preventDefault();  // also stops the browser's own Ctrl+wheel page zoom
+        setView(([a, b]) => {
+          const span = b - a;
+          const z = Math.exp(e.deltaY * 0.0015);
+          const ns = Math.max(Math.min(nb, fps * 2), Math.min(nb, span * z));
+          const anchor = a + (px / W) * span;
+          const na = Math.max(0, Math.min(nb - ns, anchor - ((anchor - a) / span) * ns));
+          return [na, na + ns];
+        });
+        return;
+      }
       setView(([a, b]) => {
         const span = b - a;
-        if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-          const d = ((e.shiftKey ? e.deltaY : e.deltaX) / W) * span;
-          const na = Math.max(0, Math.min(nb - span, a + d));
-          return [na, na + span];
-        }
-        const z = Math.exp(e.deltaY * 0.0015);
-        const ns = Math.max(Math.min(nb, fps * 2), Math.min(nb, span * z));
-        const anchor = a + (px / W) * span;
-        let na = anchor - ((anchor - a) / span) * ns;
-        na = Math.max(0, Math.min(nb - ns, na));
-        return [na, na + ns];
+        if (span >= nb - 0.5) return [a, b];  // nothing to scroll: leave the wheel to the page
+        e.preventDefault();
+        const d = ((Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) / W) * span;
+        const na = Math.max(0, Math.min(nb - span, a + d));
+        return [na, na + span];
       });
     };
     c.addEventListener("wheel", onWheel, { passive: false });
@@ -343,26 +376,37 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
     }
   }, [frame]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onKey = (e: React.KeyboardEvent) => {
-    const step = e.shiftKey ? Math.round(fps) : 1;
-    if (e.key === "ArrowRight") { onSeek(Math.min(nb - 1, frame + step)); e.preventDefault(); }
-    else if (e.key === "ArrowLeft") { onSeek(Math.max(0, frame - step)); e.preventDefault(); }
-    else if (e.key === "Home") onSeek(0);
-    else if (e.key === "End") onSeek(nb - 1);
-    else if (editable && (e.key === "i" || e.key === "I")) setInPoint(frame);
-    else if (editable && (e.key === "o" || e.key === "O") && inPoint !== null) {
-      const r: Range = [Math.min(inPoint, frame), Math.max(inPoint, frame) + 1];
-      const allIn = parts.length === 1 && parts[0][0] <= 0 && parts[0][1] >= nb;
-      commit(allIn ? [r] : add(parts, r, nb));  // the first in/out range replaces "whole clip"
-      setInPoint(null);
-    }
-  };
-
   const zoom = (k: number) => setView(([a, b]) => {
     const span = Math.max(Math.min(nb, fps * 2), Math.min(nb, (b - a) * k));
-    const c = Math.max(span / 2, Math.min(nb - span / 2, frame));
+    const c = Math.max(span / 2, Math.min(nb - span / 2, frameRef.current));
     return [c - span / 2, c + span / 2];
   });
+  const [showKeys, setShowKeys] = useState(false);
+  // I / O, zoom, fit and ? anywhere on the page (not while typing); Space, arrows, Home/End, K/L
+  // belong to the player controls
+  const keyState = useRef({ frame, inPoint, parts, editable });
+  keyState.current = { frame, inPoint, parts, editable };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+      const s = keyState.current;
+      if (e.key === "?") { setShowKeys((v) => !v); e.preventDefault(); }
+      else if (e.key === "Escape") setShowKeys(false);
+      else if (e.key === "+" || e.key === "=") zoom(0.5);
+      else if (e.key === "-" || e.key === "_") zoom(2);
+      else if (e.key === "\\") setView([0, nb]);
+      else if (s.editable && (e.key === "i" || e.key === "I")) setInPoint(s.frame);
+      else if (s.editable && (e.key === "o" || e.key === "O") && s.inPoint !== null) {
+        const r: Range = [Math.min(s.inPoint, s.frame), Math.max(s.inPoint, s.frame) + 1];
+        const allIn = s.parts.length === 1 && s.parts[0][0] <= 0 && s.parts[0][1] >= nb;
+        commit(allIn ? [r] : add(s.parts, r, nb));  // the first in/out range replaces "whole clip"
+        setInPoint(null);
+      }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [nb]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const suggested = scan?.suggested ?? [];
   const allIn = parts.length === 1 && parts[0][0] <= 0 && parts[0][1] >= nb;
   const covered = parts.reduce((s, [a, b]) => s + b - a, 0);
@@ -396,10 +440,16 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
         </>}
         <button className="chip" onClick={() => zoom(0.5)} title="Zoom in (wheel)">+</button>
         <button className="chip" onClick={() => zoom(2)} title="Zoom out (wheel)">−</button>
-        <button className="chip" onClick={() => setView([0, nb])} title="Show the whole clip">Fit</button>
+        <button className="chip" onClick={() => setView([0, nb])} title="Show the whole clip (\)">Fit</button>
+        <button className="chip" onClick={() => setShowKeys(!showKeys)} title="Keyboard and mouse shortcuts (?)">⌨ Shortcuts</button>
       </div>
-      <div ref={wrap} className="tl-canvas" tabIndex={0} onKeyDown={onKey} onPointerLeave={() => setHover(null)}
-        aria-label="Timeline: click or drag to seek; arrows step frames">
+      {showKeys && (
+        <div className="tl-keys" role="dialog" aria-label="Shortcuts">
+          {SHORTCUTS.map(([k, what]) => <div key={k}><kbd>{k}</kbd><span>{what}</span></div>)}
+        </div>
+      )}
+      <div ref={wrap} className="tl-canvas" onPointerLeave={() => setHover(null)}
+        aria-label="Timeline: click or drag to seek">
         <canvas ref={canvas} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
         {preview}
       </div>

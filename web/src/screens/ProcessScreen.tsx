@@ -210,7 +210,9 @@ function DriftVerdict({ drift, stabilized, onSkip }: {
 /** The clip, scrubbable: a small player and the timeline (parts to analyse, activity). */
 function ClipPreview({ project, onChanged }: { project: Project; onChanged: (p: Project) => void }) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
   const { frame } = useVideoFrame(video, project.info.container_fps);
+  const fps = project.config.capture_fps || project.info.container_fps;
   const rot = project.config.rotation ?? 0;
   const seek = (f: number) => {
     if (!video) return;
@@ -220,11 +222,12 @@ function ClipPreview({ project, onChanged }: { project: Project; onChanged: (p: 
   if (!project.status.proxy_mp4) return <p className="muted small">The clip preview appears when the proxy is built.</p>;
   return (
     <div className="clip-preview">
-      <div className={`clip-video${rot ? " rotated" : ""}`}>
+      <div ref={setBox} className={`clip-video${rot ? " rotated" : ""}`}>
         <RotatedVideo rotation={rot} videoRef={setVideo} src={api.proxyUrl(project.id)} muted playsInline preload="auto"
           onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
       </div>
-      {video && <VideoControls video={video} />}
+      <VideoControls video={video} containerFps={project.info.container_fps} fullscreenEl={box}
+        realTime={(t) => (t * project.info.container_fps) / fps} />
       <Timeline project={project} frame={frame} onSeek={seek} onProjectChange={onChanged} />
     </div>
   );

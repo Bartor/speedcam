@@ -3,7 +3,7 @@ import Timeline from "../components/Timeline";
 import Help from "../components/Help";
 import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
-import RotatedVideo from "../components/RotatedVideo";
+import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
 import RotateButtons from "../components/RotateButtons";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onNext: () => void }
@@ -189,10 +189,10 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
               onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
           ) : <div className="scrub-video placeholder">proxy building…</div>}
           <div className="grow scrub-body">
+            <VideoControls video={video} containerFps={info.container_fps}
+              realTime={(t) => (t * info.container_fps) / (project.config.capture_fps || info.container_fps)} />
             <Timeline project={project} frame={scrub} onSeek={seek} onProjectChange={onChanged} />
             <div className="row small">
-              <button onClick={() => seek(scrub - 1)} title="Previous frame">◀ 1</button>
-              <button onClick={() => seek(scrub + 1)} title="Next frame">1 ▶</button>
               <span className="muted">Frame</span>
               <input type="number" className="narrow" value={scrub} onChange={(e) => seek(+e.target.value)} />
               <span className="muted frame-readout">/ {info.nb_frames - 1} · t = {fmt(scrub / (project.config.capture_fps || info.container_fps), 3)} s real</span>
