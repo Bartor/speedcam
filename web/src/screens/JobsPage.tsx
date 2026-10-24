@@ -6,7 +6,7 @@ import "../components/library.css";
 const KIND: Record<string, string> = {
   analyze: "Analysis", render: "Render", recompute: "Recompute", preview: "Preview", proxy: "Proxy", scan: "Activity scan",
 };
-const SCREEN: Record<string, string> = { scan: "process", analyze: "results", render: "results", recompute: "results", preview: "process", proxy: "import" };
+const SCREEN: Record<string, string> = { scan: "process", analyze: "results", render: "export", recompute: "results", preview: "process", proxy: "import" };
 
 export const fmtBytes = (n: number) =>
   n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;

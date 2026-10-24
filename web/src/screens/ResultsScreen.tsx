@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import Timeline from "../components/Timeline";
-import Help, { Advanced } from "../components/Help";
+import Help from "../components/Help";
 import "../components/speed-profile.css";
-import { api, fmt, margin, marginBreakdown, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
+import { api, fmt, margin, marginBreakdown, MergeCandidates, Project, Results, Stats, useVideoFrame, Vehicle } from "../api";
 import MarginPanel from "../components/MarginPanel";
 import ValidationPanel from "../components/ValidationPanel";
 import Histogram from "../components/Histogram";
-import ProgressBar from "../components/ProgressBar";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
-import SpeedProfile from "../components/SpeedProfile";
+import SpeedProfile, { vehicleEvents } from "../components/SpeedProfile";
 import ViolationsPanel from "../components/ViolationsPanel";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
+import { SortBy, SplitsPanel, VehicleCard, VehicleList } from "../components/Vehicles";
 
-interface Props { project: Project; onChanged: (p: Project) => void }
+interface Props { project: Project; onChanged: (p: Project) => void; onExport: () => void }
 
 type SortKey = keyof Vehicle;
 const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "track_id", label: "#" },
+  { key: "name", label: "Name" },
   { key: "class", label: "Class" },
   { key: "path", label: "Path" },
   { key: "direction", label: "Dir" },
@@ -31,70 +32,67 @@ const COLS: { key: SortKey; label: string; d?: number; title?: string }[] = [
   { key: "accel_mps2", label: "a m/s²", d: 2 },
 ];
 
-export default function ResultsScreen({ project, onChanged }: Props) {
+/** Results as a dashboard: the clip with the vehicle list beside it, the selected vehicle's speed
+ * along the section and its card below, then the statistics, violations and margins. Rendering
+ * and downloads are on the Export screen. */
+export default function ResultsScreen({ project, onChanged, onExport }: Props) {
   const [res, setRes] = useState<Results | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [dir, setDir] = useState<"all" | "A->B" | "B->A">("all");
   const [road, setRoad] = useState<string>("all");
   const [validOnly, setValidOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>("time");
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: "t_entry_s", asc: true });
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
-  const [source, setSource] = useState<"render" | "proxy">("proxy");
   const [showOverlay, setShowOverlay] = useState(true);
   const [overlay, setOverlay] = useState<OverlayData | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [metric, setMetric] = useState<"max" | "avg">("max");
-  const [renderJob, setRenderJob] = useState<string | null>(project.jobs.find((j) => j.kind === "render")?.id ?? null);
-  const rs = project.config.render as any;
-  const [rset, setRset] = useState({
-    mode: rs.mode, output_fps: rs.output_fps ?? "", playback_speed: rs.playback_speed, lut: rs.lut ?? "",
-    speed_limit_kmh: rs.speed_limit_kmh,
-    panel: rs.panel ?? "right", panel_layout: rs.panel_layout ?? "overlay", panel_sort: rs.panel_sort ?? "latest",
-    panel_rows: rs.panel_rows ?? 7, title: rs.title ?? "", subtitle: rs.subtitle ?? "", footer: rs.footer ?? "",
-    show_hud: !!rs.show_hud, show_margin: rs.show_margin ?? true, label_position: rs.label_position ?? "above",
-    only_parts: rs.only_parts ?? true,
-    scale: rs.scale === 0.5 && project.info.height > 1080 ? +(1080 / project.info.height).toFixed(4) : rs.scale,
-  });
+  const [cands, setCands] = useState<MergeCandidates | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const load = () => {
+  const extras = () => {
     api.overlay(project.id).then(setOverlay).catch(() => setOverlay(null));
+    api.mergeCandidates(project.id).then(setCands).catch(() => setCands(null));
+  };
+  const load = () => {
+    extras();
     return api.results(project.id).then((r) => { setRes(r); setErr(null); }).catch((e) => setErr(String(e)));
   };
-  useEffect(() => { load(); }, [project.id]);
-  const rjob = useJob(renderJob, () => { load(); api.project(project.id).then(onChanged); });
+  useEffect(() => { load(); }, [project.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // new tracks or merges: the suggestions are stale until they're found again
+  const gotResults = (r: Results) => { setRes(r); setCands(null); extras(); api.project(project.id).then(onChanged).catch(() => {}); };
 
-  const useRender = source === "render" && !!res?.render;
-  // the rendered MP4 is already rotated (as it was when rendered); the proxy is rotated here
   const rotation = project.config.rotation ?? 0;
-  const viewRot = useRender ? 0 : rotation;
   const fps = res?.capture_fps ?? project.config.capture_fps ?? project.info.container_fps;
-  // proxy frames are 1:1 with the source; render time = real time / playback_speed
-  const { frame, mediaTime } = useVideoFrame(video, useRender ? (res!.render!.output_fps) : project.info.container_fps);
-  const tNow = useRender ? mediaTime * res!.render!.playback_speed : frame / fps;
-
+  const { frame } = useVideoFrame(video, project.info.container_fps);
+  const tNow = frame / fps;
   const seekTime = (t: number) => {
     if (!video) return;
-    t = Math.max(0, t);
-    video.currentTime = useRender ? t / res!.render!.playback_speed : (t * fps + 0.5) / project.info.container_fps;
+    video.currentTime = (Math.max(0, t) * fps + 0.5) / project.info.container_fps;
     video.pause();
   };
-  const seekTo = (v: Vehicle) => seekTime(v.t_entry_s - 0.3);
+  const pick = (v: Vehicle) => { setSelected(v.track_id); seekTime(v.t_entry_s - 0.3); };
 
   const rows = useMemo(() => {
     if (!res) return [];
     const r = res.vehicles.filter((v) => (dir === "all" || v.direction === dir) && (!validOnly || v.valid) &&
       (road === "all" || v.path === road));
-    return [...r].sort((a, b) => {
-      const x = a[sort.key], y = b[sort.key];
-      const c = typeof x === "number" ? (x as number) - (y as number) : String(x).localeCompare(String(y));
-      return sort.asc ? c : -c;
-    });
-  }, [res, dir, validOnly, sort, road]);
+    const by = sortBy === "max" ? (a: Vehicle, b: Vehicle) => b.speed_max_kmh - a.speed_max_kmh
+      : sortBy === "name" ? (a: Vehicle, b: Vehicle) => (a.name || "~").localeCompare(b.name || "~") || a.t_entry_s - b.t_entry_s
+        : (a: Vehicle, b: Vehicle) => a.t_entry_s - b.t_entry_s;
+    return [...r].sort(by);
+  }, [res, dir, validOnly, road, sortBy]);
+  const tableRows = useMemo(() => [...rows].sort((a, b) => {
+    const x = a[sort.key], y = b[sort.key];
+    const c = typeof x === "number" ? (x as number) - (y as number) : String(x ?? "").localeCompare(String(y ?? ""));
+    return sort.asc ? c : -c;
+  }), [rows, sort]);
 
   const useMax = metric === "max" && !!res?.stats_max;
   const roads = Object.keys(res?.by_path ?? {});
-  const cols = COLS.filter((c) => c.key !== "path" || roads.length > 0);
+  const cols = COLS.filter((c) => (c.key !== "path" || roads.length > 0) && (c.key !== "name" || res?.vehicles.some((v) => v.name)));
   const stats: Stats | undefined = res
     ? (road !== "all" && res.by_path?.[road]
       ? (useMax ? res.by_path[road].max : res.by_path[road].avg)
@@ -102,97 +100,156 @@ export default function ResultsScreen({ project, onChanged }: Props) {
     : undefined;
   const validSpeeds = res ? res.vehicles.filter((v) => v.valid && (useMax || v.avg_valid !== false) && (road !== "all" ? v.path === road : dir === "all" || v.direction === dir))
     .map((v) => (useMax ? v.speed_max_kmh : v.speed_kmh)) : [];
-  // profile shown: the clicked vehicle, else the fastest valid one
+  // shown: the picked vehicle, else the fastest valid one
   const fastest = res?.vehicles.filter((v) => v.valid).sort((a, b) => b.speed_max_kmh - a.speed_max_kmh)[0];
-  const shown = res?.vehicles.find((v) => v.track_id === selected) ?? fastest;
-  const limit = +rset.speed_limit_kmh || 50;
-
-  const startRender = async () => {
-    try {
-      const body: Record<string, unknown> = {
-        mode: rset.mode, playback_speed: +rset.playback_speed, scale: +rset.scale, speed_limit_kmh: +rset.speed_limit_kmh,
-        output_fps: rset.output_fps === "" ? null : +rset.output_fps, lut: rset.lut || null,
-        panel: rset.panel, panel_layout: rset.panel_layout, panel_sort: rset.panel_sort, panel_rows: +rset.panel_rows,
-        title: rset.title, subtitle: rset.subtitle, footer: rset.footer, show_hud: rset.show_hud,
-        show_margin: rset.show_margin, label_position: rset.label_position, only_parts: rset.only_parts,
-      };
-      setRenderJob((await api.render(project.id, body)).id);
-    } catch (e) { setErr(String(e)); }
-  };
+  const shown = res?.vehicles.find((v) => v.track_id === selected) ?? fastest ?? res?.vehicles[0];
+  const limit = +(project.config.render as any).speed_limit_kmh || 50;
 
   const recompute = async () => {
-    try { setRes(await api.recompute(project.id)); api.overlay(project.id).then(setOverlay); } catch (e) { setErr(String(e)); }
+    setBusy("Recomputing speeds…");
+    try { gotResults(await api.recompute(project.id)); } catch (e) { setErr(String(e)); } finally { setBusy(null); }
+  };
+  const merge = async (ids: number[]) => {
+    setBusy("Merging and measuring again…");
+    try {
+      const r = await api.mergeVehicles(project.id, ids);
+      gotResults(r);
+      const kept = r.vehicles.find((v) => ids.some((i) => v.merged?.includes(i)));
+      if (kept) setSelected(kept.track_id);
+    } catch (e) { setErr(String(e)); } finally { setBusy(null); }
+  };
+  const split = async (tid: number) => {
+    setBusy("Splitting and measuring again…");
+    try { gotResults(await api.splitVehicle(project.id, tid)); } catch (e) { setErr(String(e)); } finally { setBusy(null); }
+  };
+  const named = async (tid: number, name: string) => {
+    try {
+      await api.nameVehicle(project.id, tid, name);
+      setRes((r) => r && { ...r, vehicles: r.vehicles.map((v) => (v.track_id === tid ? { ...v, name } : v)) });
+      setCands((c) => c && { ...c, tracks: { ...c.tracks, ...(c.tracks[String(tid)] ? { [String(tid)]: { ...c.tracks[String(tid)], name } } : {}) } });
+    } catch (e) { setErr(String(e)); }
   };
 
   if (err && !res) return <div className="page"><div className="banner warn">{err}</div></div>;
   if (!res) return <div className="page muted">Loading…</div>;
-  const renderRunning = ["running", "queued", "connecting"].includes(rjob.status);
   const reqN = stats?.required_n?.p85;
+  const nValid = res.vehicles.filter((v) => v.valid).length;
+  const nOver = res.vehicles.filter((v) => v.valid && v.speed_max_kmh > limit).length;
+  const nViol = (res.violations?.n_red_light ?? 0) + (res.violations?.n_solid_line ?? 0);
+  const noPathOrLines = !(project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) && !(project.config.calibration.line_a && project.config.calibration.line_b);
+
+  const empty = (
+    <div className="banner warn small">
+      {res.vehicles.length === 0 && res.calibration?.method === "none" ? (
+        <>Tracking only: {res.run.tracks ?? 0} vehicles were tracked, but there's no usable calibration, so nothing was measured. Calibrate and draw a path or lines, then press Recompute.</>
+      ) : res.vehicles.length === 0 && noPathOrLines ? (
+        <>No speeds measured: {res.run.tracks ?? 0} vehicles were tracked, but there's no path or lines A/B to measure them on. Draw them on the Calibrate screen, then press Recompute.</>
+      ) : <>No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.</>}
+      {res.vehicles.length === 0 && res.calibration?.method !== "none" && !noPathOrLines && res.run.tracks !== undefined && <> Detector: {res.run.detections_per_frame?.toFixed(1)} detections/frame,
+        {" "}{res.run.tracks} tracks ({res.run.tracks_long_enough} long enough): {res.run.tracks_crossing_a_only} crossed only A,
+        {" "}{res.run.tracks_crossing_b_only} only B, {res.run.tracks_crossing_neither} neither.
+        {res.run.detections_per_frame < 1 ? " Very few detections: try another model or tiling (Process → Preview tracking)." :
+          " Check that lines A and B span every lane the vehicles use (watch the overlay)."}</>}
+    </div>
+  );
 
   return (
-    <div className="results">
-      <div className="res-left">
-        <div ref={setWrapEl} className={`video-wrap${viewRot ? " rotated" : ""}`}>
-          <RotatedVideo key={useRender ? "r" : "p"} rotation={viewRot} videoRef={setVideo} muted playsInline preload="auto"
-            onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }}
-            src={useRender ? `${api.fileUrl(project.id, "render.mp4")}?v=${res.render!.file}${rjob.end?.id ?? ""}` : api.proxyUrl(project.id)} />
-          {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} rotation={viewRot} />}
-        </div>
-        <VideoControls video={video} seekBar={useRender} fullscreenEl={wrapEl}
-          containerFps={useRender ? res.render!.output_fps : project.info.container_fps}
-          realTime={(t) => (useRender ? t * res.render!.playback_speed : (t * project.info.container_fps) / fps)} />
-        {!useRender && (
-          <Timeline project={project} frame={frame} onProjectChange={onChanged}
+    <div className="dash">
+      <div className="dash-head">
+        <h2>Results</h2>
+        <span className="tag">{nValid} valid of {res.vehicles.length}</span>
+        {res.vehicles.length > 0 && <span className={`tag ${nOver ? "bad" : ""}`}>{nOver} over {limit} km/h</span>}
+        {res.stats_max?.p85 !== undefined && <span className="tag">p85 {fmt(res.stats_max.p85)} km/h</span>}
+        {res.violations && <span className={`tag ${nViol ? "bad" : ""}`}>{nViol} violation{nViol === 1 ? "" : "s"}</span>}
+        <span className="grow" />
+        <button onClick={recompute} disabled={!!busy} title="Re-run speeds and violation checks from stored tracks (after editing lines, lights, calibration or thresholds). Lights added or moved since the analysis are read from the video, which takes a minute.">Recompute</button>
+        <button className="primary" onClick={onExport} title="Render the annotated video, download the data">Export →</button>
+      </div>
+      {res.calibration_check?.status === "suspect" && (
+        <div className="banner warn small calib-check"><b>Check the calibration.</b> {res.calibration_check.message}</div>
+      )}
+      {res.timing_warnings.map((w) => <div key={w} className="banner info small">{w}</div>)}
+      {err && <div className="banner error">{err}</div>}
+
+      <div className="dash-top">
+        <div className="dash-player">
+          <div ref={setWrapEl} className={`video-wrap${rotation ? " rotated" : ""}`}>
+            <RotatedVideo rotation={rotation} videoRef={setVideo} muted playsInline preload="auto" src={api.proxyUrl(project.id)}
+              onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
+            {showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} rotation={rotation} />}
+          </div>
+          <VideoControls video={video} fullscreenEl={wrapEl} containerFps={project.info.container_fps}
+            realTime={(t) => (t * project.info.container_fps) / fps} />
+          <Timeline project={project} frame={frame} editable={false}
             onSeek={(f) => { if (video) { video.pause(); video.currentTime = (f + 0.5) / project.info.container_fps; } }}
             vehicles={res.vehicles.map((v) => ({ id: v.track_id, f0: Math.round(v.t_entry_s * fps), f1: Math.round(v.t_exit_s * fps), valid: v.valid }))}
-            selectedVehicle={selected} onPickVehicle={setSelected} />
-        )}
-        <div className="video-bar small">
-          <span className="time-readout">t = <b>{tNow.toFixed(3)}</b> s real</span>
-          <span className="grow" />
-          {!useRender && <label className="small"><input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} /> tracking overlay</label>}
-          {res.render && (
-            <div className="seg-ctl">
-              <button className={!useRender ? "active" : ""} onClick={() => setSource("proxy")}>Proxy + overlay</button>
-              <button className={useRender ? "active" : ""} onClick={() => setSource("render")}>Rendered MP4</button>
-            </div>
-          )}
+            selectedVehicle={shown?.track_id ?? null} onPickVehicle={setSelected} />
+          <div className="video-bar small">
+            <label className="small"><input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} /> tracking overlay</label>
+          </div>
         </div>
+        <VehicleList projectId={project.id} res={res} rows={rows} selected={shown?.track_id ?? null} tNow={tNow} limit={limit} onPick={pick}
+          dir={dir} setDir={setDir} road={road} setRoad={setRoad} roads={roads} validOnly={validOnly} setValidOnly={setValidOnly}
+          sortBy={sortBy} setSortBy={setSortBy} empty={empty} />
+      </div>
 
-        {shown && (
+      {shown && (
+        <div className="dash-mid">
           <section className="panel">
             <div className="panel-head">
               <h3>Speed along the section<Help topic="results.profile" /></h3>
-              <span className="tag">#{shown.track_id} {shown.class} · {shown.direction.replace("->", " → ")}</span>
-              {selected === null && <span className="muted small">fastest vehicle · click a row to pick another</span>}
+              <span className="tag">{shown.name || `#${shown.track_id} ${shown.class}`} · {shown.direction.replace("->", " → ")}</span>
+              {selected === null && <span className="muted small">fastest vehicle · pick another in the list or on the timeline</span>}
             </div>
-            <SpeedProfile v={shown} limit={limit} tNow={tNow} />
+            <SpeedProfile v={shown} limit={limit} tNow={tNow} events={vehicleEvents(res, shown.track_id)} onSeek={seekTime} />
           </section>
-        )}
+          <VehicleCard projectId={project.id} res={res} v={shown} cands={cands} busy={busy}
+            onNamed={named} onMerge={merge} onSplit={split} onSeek={seekTime} />
+        </div>
+      )}
 
+      <div className="dash-grid">
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Speed statistics<Help topic="results.stats" /></h3>
+            {road !== "all" ? <span className="tag">{road}</span> : dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
+            <span className="grow" />
+            {res.stats_max && (
+              <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
+                <button className={useMax ? "active" : ""} onClick={() => setMetric("max")}>Max</button>
+                <button className={!useMax ? "active" : ""} onClick={() => setMetric("avg")}>Average</button>
+              </div>
+            )}
+          </div>
+          <div className="tiles">
+            <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${road !== "all" ? res.vehicles.filter((v) => v.path === road).length
+              : dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
+            <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
+              note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ sample sufficient" : `✕ need ${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2 vehicles"}
+              tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />
+            <Tile label="Mean" unit="km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `CI ${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
+            <Tile label="Standard deviation σ" unit="km/h" value={fmt(stats?.sd, 2)} />
+            <Tile label="85th percentile" unit="km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `CI ${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
+            <Tile label="95th percentile" unit="km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `CI ${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
+          </div>
+          <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
+          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines, from cleanly tracked frames." : "Per vehicle: average speed from line A to line B, only where it's conclusive (no detection gap or jump)."}
+            {" "}{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
+        </section>
         {res.violations && (
           <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
             onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
             hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
             solidMode={(project.config.violations as any)?.solid_mode ?? "centre"} />
         )}
+        {cands && <SplitsPanel cands={cands} busy={busy} onMerge={merge} onSeek={seekTime} />}
+        <MarginPanel project={project} res={res} onProject={onChanged} onRecomputed={gotResults} />
+      </div>
 
-        {(res.vehicles.length > 0 || !res.violations) && <section className="panel">
-          <div className="panel-head">
-            <h3>Vehicles<Help topic="results.vehicles" /></h3>
-            <span className="tag">{rows.length}{rows.length !== res.vehicles.length ? ` of ${res.vehicles.length}` : ""}</span>
-            <span className="grow" />
-            <div className="seg-ctl">
-              {(["all", "A->B", "B->A"] as const).map((d) => <button key={d} className={dir === d ? "active" : ""} onClick={() => setDir(d)}>{d === "all" ? "All" : d.replace("->", " → ")}</button>)}
-            </div>
-            {roads.length > 0 && (
-              <select value={road} onChange={(e) => setRoad(e.target.value)} title="Path of motion (road)">
-                <option value="all">All paths</option>
-                {roads.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-            )}
-            <label className="small"><input type="checkbox" checked={validOnly} onChange={(e) => setValidOnly(e.target.checked)} /> valid only</label>
-          </div>
+      {res.vehicles.length > 0 && (
+        <details className="panel all-table">
+          <summary><h3>All measurements</h3><span className="tag">{tableRows.length}</span>
+            <span className="muted small">every column, sortable · the same filter as the list</span></summary>
           <div className="table-wrap">
             <table className="vehicles">
               <thead>
@@ -208,11 +265,11 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((v) => {
+                {tableRows.map((v) => {
                   const active = tNow >= v.t_entry_s - 0.5 && tNow <= v.t_exit_s + 0.5;
                   return (
                     <tr key={v.track_id} className={`${active ? "active" : ""} ${v.valid ? "" : "invalid"} ${shown?.track_id === v.track_id ? "selected" : ""}`}
-                      onClick={() => { setSelected(v.track_id); seekTo(v); }}>
+                      onClick={() => pick(v)}>
                       {cols.map((c) => {
                         const x = v[c.key];
                         const mk = c.key === "speed_max_kmh" ? "max" : c.key === "speed_kmh" ? "avg" : null;
@@ -221,164 +278,26 @@ export default function ResultsScreen({ project, onChanged }: Props) {
                         if (inconclusive) return <td key={c.key} className="num muted" title={`Average inconclusive (${v.flags}): a detection gap or position jump in the stretch. The max only uses cleanly tracked frames.`}>–</td>;
                         return <td key={c.key} title={mk ? marginBreakdown(v, mk) : undefined}
                           className={c.key === "speed_max_kmh" ? `num strong${v.valid && (x as number) > limit ? " bad-text" : ""}` : typeof x === "number" ? "num" : ""}>
-                          {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x).replace("->", "→")}
+                          {typeof x === "number" && c.d !== undefined ? x.toFixed(c.d) : String(x ?? "").replace("->", "→")}
                           {pm && <span className="pm">({pm})</span>}
                         </td>;
                       })}
                       <td className="status-cell">{v.valid ? <span className="status ok">✓ valid</span> : <span className="status bad" title={v.flags}>✕ {v.flags}</span>}
                         {v.valid && v.avg_valid === false && <span className="status warn" title={`${v.flags}: the average over the stretch is inconclusive; the max comes from the ${Math.round(v.max_clean_pct ?? 0)} % of it tracked cleanly`}>avg inconclusive</span>}
                         {v.valid && v.avg_valid !== false && v.flags && <span className="status warn" title="Flag that does not invalidate">⚠ {v.flags}</span>}
-                        {v.violations?.map((x) => <span key={x} className="status bad" title="Violation (see Violations above)">⛔ {x}</span>)}</td>
+                        {(v.merged?.length ?? 0) > 1 && <span className="status" title="Measured as one vehicle from these tracks">⧉ {v.merged!.join("+")}</span>}
+                        {v.violations?.map((x) => <span key={x} className="status bad" title="Violation (see Violations)">⛔ {x}</span>)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
             {res.uncertainty && <p className="footnote">(± %) = 95 % margin of error per vehicle (calibration and noise; "+a −b" also allows the uncorrected height-parallax bias). Hover a speed for its breakdown.</p>}
-            {rows.length === 0 && (
-              <div className="banner warn small">
-                {res.vehicles.length === 0 && res.calibration?.method === "none" ? (
-                  <>Tracking only: {res.run.tracks ?? 0} vehicles were tracked, but there's no usable calibration, so nothing was measured. Calibrate and draw a path or lines, then press Recompute.</>
-                ) : res.vehicles.length === 0 && !(project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) && !(project.config.calibration.line_a && project.config.calibration.line_b) ? (
-                  <>No speeds measured: {res.run.tracks ?? 0} vehicles were tracked, but there's no path or lines A/B to measure them on. Draw them on the Calibrate screen, then press Recompute.</>
-                ) : <>No vehicles {res.vehicles.length ? "match the filter" : "crossed both lines"}.</>}
-                {res.vehicles.length === 0 && res.calibration?.method !== "none" && ((project.config.calibration.paths ?? []).some((p) => p.points.length >= 2) || (project.config.calibration.line_a && project.config.calibration.line_b)) && res.run.tracks !== undefined && <> Detector: {res.run.detections_per_frame?.toFixed(1)} detections/frame,
-                  {" "}{res.run.tracks} tracks ({res.run.tracks_long_enough} long enough): {res.run.tracks_crossing_a_only} crossed only A,
-                  {" "}{res.run.tracks_crossing_b_only} only B, {res.run.tracks_crossing_neither} neither.
-                  {res.run.detections_per_frame < 1 ? " Very few detections: try another model or tiling (Process → Preview tracking)." :
-                    " Check that lines A and B span every lane the vehicles use (watch the overlay)."}</>}
-              </div>
-            )}
           </div>
-        </section>}
+        </details>
+      )}
 
-        <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
-      </div>
-
-      <aside className="res-side">
-        <section className="panel">
-          <div className="panel-head">
-            <h3>Speed statistics<Help topic="results.stats" /></h3>
-            {road !== "all" ? <span className="tag">{road}</span> : dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
-            <span className="grow" />
-            {res.stats_max && (
-              <div className="seg-ctl" title="Statistics of each vehicle's max momentary speed, or of its A→B average">
-                <button className={useMax ? "active" : ""} onClick={() => setMetric("max")}>Max</button>
-                <button className={!useMax ? "active" : ""} onClick={() => setMetric("avg")}>Average</button>
-              </div>
-            )}
-          </div>
-          {res.calibration_check?.status === "suspect" && (
-            <div className="banner warn small calib-check"><b>Check the calibration.</b> {res.calibration_check.message}</div>
-          )}
-          <div className="tiles">
-            <Tile label="Valid / measured" value={`${stats?.n_valid ?? 0} / ${road !== "all" ? res.vehicles.filter((v) => v.path === road).length
-              : dir === "all" ? res.stats.n_total : res.vehicles.filter((v) => v.direction === dir).length}`} />
-            <Tile label={`Required n (p85, ±${stats?.permitted_error_kmh} km/h)`} value={reqN !== undefined ? String(reqN) : "–"}
-              note={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "✓ sample sufficient" : `✕ need ${reqN - (stats?.n_valid ?? 0)} more`) : "needs ≥2 vehicles"}
-              tone={reqN !== undefined ? ((stats?.n_valid ?? 0) >= reqN ? "ok" : "bad") : undefined} />
-            <Tile label="Mean" unit="km/h" value={fmt(stats?.mean)} note={stats?.mean_ci ? `CI ${fmt(stats.mean_ci[0])}–${fmt(stats.mean_ci[1])}` : ""} />
-            <Tile label="Standard deviation σ" unit="km/h" value={fmt(stats?.sd, 2)} />
-            <Tile label="85th percentile" unit="km/h" value={fmt(stats?.p85)} note={stats?.p85_ci ? `CI ${fmt(stats.p85_ci[0])}–${fmt(stats.p85_ci[1])}` : ""} />
-            <Tile label="95th percentile" unit="km/h" value={fmt(stats?.p95)} note={stats?.p95_ci ? `CI ${fmt(stats.p95_ci[0])}–${fmt(stats.p95_ci[1])}` : ""} />
-          </div>
-          <p className="footnote">{Math.round((stats?.confidence ?? 0.95) * 100)} % intervals: t-interval for the mean, bootstrap for percentiles. Required n uses the ITE spot-speed formula with the σ measured so far.</p>
-          <Histogram values={validSpeeds} mean={stats?.mean} p85={stats?.p85} />
-          <p className="footnote">{useMax ? "Per vehicle: highest momentary speed between the lines, from cleanly tracked frames." : "Per vehicle: average speed from line A to line B, only where it's conclusive (no detection gap or jump)."}</p>
-        </section>
-
-        <MarginPanel project={project} res={res} onProject={onChanged}
-          onRecomputed={(r) => { setRes(r); api.overlay(project.id).then(setOverlay); }} />
-
-        <section className="panel">
-          <h3>Export</h3>
-          <div className="export-grid">
-            <a className="button" href={api.fileUrl(project.id, "results.csv")}><span className="dl-ico">↓</span>results.csv</a>
-            <a className="button" href={api.fileUrl(project.id, "results.json")}><span className="dl-ico">↓</span>results.json</a>
-            {res.violations && <a className="button" href={api.fileUrl(project.id, "violations.csv")}><span className="dl-ico">↓</span>violations.csv</a>}
-            {res.render && <a className="button" href={api.fileUrl(project.id, "render.mp4")}><span className="dl-ico">↓</span>render.mp4</a>}
-          </div>
-          <div className="row">
-            <button onClick={recompute} title="Re-run speeds and violation checks from stored tracks (after editing lines, lights, calibration or thresholds). Lights added or moved since the analysis are read from the video, which takes a minute.">Recompute</button>
-          </div>
-        </section>
-
-        <section className="panel">
-          <h3>Render annotated video<Help topic="results.render" /></h3>
-          <div className="form-grid compact">
-            <label>Playback speed</label>
-            <select value={String(rset.playback_speed)} onChange={(e) => setRset({ ...rset, playback_speed: +e.target.value })}>
-              <option value="1">1× real time</option><option value="0.5">0.5×</option><option value="0.25">0.25×</option>
-            </select>
-            <label>Speed limit (colour)</label>
-            <input type="number" value={rset.speed_limit_kmh} onChange={(e) => setRset({ ...rset, speed_limit_kmh: e.target.value })} />
-            <label title="Side of each vehicle where its speed label goes in the video. Pick the side away from neighbouring lanes and lines, e.g. left or right when traffic runs across the picture.">Speed labels</label>
-            <select value={rset.label_position} onChange={(e) => setRset({ ...rset, label_position: e.target.value })}>
-              <option value="above">above the vehicle</option><option value="below">below the vehicle</option>
-              <option value="left">left of the vehicle</option><option value="right">right of the vehicle</option>
-            </select>
-            {project.config.parts && <>
-              <label title="The analysis covered only some parts of the video (activity scan): render just those, back to back">Only analysed parts</label>
-              <input type="checkbox" checked={rset.only_parts} onChange={(e) => setRset({ ...rset, only_parts: e.target.checked })} />
-            </>}
-            <label title="Lists every vehicle's max speed as it crosses the second line, with totals">Vehicle panel</label>
-            <select value={rset.panel} onChange={(e) => setRset({ ...rset, panel: e.target.value })}>
-              <option value="right">right side</option><option value="left">left side</option><option value="none">off</option>
-            </select>
-            {rset.panel !== "none" && <>
-              <label>Title</label>
-              <input type="text" value={rset.title} placeholder="e.g. street, city" onChange={(e) => setRset({ ...rset, title: e.target.value })} />
-              <label>Subtitle</label>
-              <input type="text" value={rset.subtitle} placeholder="e.g. date · time" onChange={(e) => setRset({ ...rset, subtitle: e.target.value })} />
-            </>}
-          </div>
-          <Advanced id="render">
-            <div className="form-grid compact">
-              <label>Mode</label>
-              <select value={rset.mode} onChange={(e) => setRset({ ...rset, mode: e.target.value })}>
-                <option value="stabilized">stabilized (lines fixed)</option><option value="original">original frames</option>
-              </select>
-              <label>Output fps</label>
-              <select value={String(rset.output_fps)} onChange={(e) => setRset({ ...rset, output_fps: e.target.value })}>
-                <option value="">native ({fps} fps)</option><option value="60">60</option><option value="30">30</option>
-              </select>
-              <label title="Output size as a share of the original resolution">Scale</label>
-              <input type="number" step="any" value={rset.scale} onChange={(e) => setRset({ ...rset, scale: e.target.value })} />
-              <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
-              <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
-              {rset.panel !== "none" && <>
-                <label title="Overlay keeps the video's 16:9 frame; extend adds the panel beside it (wider video)">Panel layout</label>
-                <select value={rset.panel_layout} onChange={(e) => setRset({ ...rset, panel_layout: e.target.value })}>
-                  <option value="overlay">over the video (16:9)</option><option value="extend">beside the video (wider)</option>
-                </select>
-                <label>List order</label>
-                <select value={rset.panel_sort} onChange={(e) => setRset({ ...rset, panel_sort: e.target.value })}>
-                  <option value="latest">latest first</option><option value="fastest">fastest first</option>
-                </select>
-                <label>Rows</label>
-                <input type="number" min={1} max={20} value={rset.panel_rows} onChange={(e) => setRset({ ...rset, panel_rows: e.target.value })} />
-                <label title="Each row shows the max speed's 95 % margin of error">Margin of error</label>
-                <input type="checkbox" checked={rset.show_margin} onChange={(e) => setRset({ ...rset, show_margin: e.target.checked })} />
-                <label>Footer</label>
-                <input type="text" value={rset.footer} placeholder="e.g. source, handle" onChange={(e) => setRset({ ...rset, footer: e.target.value })} />
-              </>}
-              <label title="Small time / frame readout in the corner">Technical readout</label>
-              <input type="checkbox" checked={rset.show_hud} onChange={(e) => setRset({ ...rset, show_hud: e.target.checked })} />
-            </div>
-          </Advanced>
-          <div className="row end">
-            {renderRunning ? <button className="danger" onClick={() => renderJob && api.cancel(renderJob)}>Cancel render</button>
-              : <button className="primary" onClick={startRender}>{res.render ? "Re-render" : "Render"}</button>}
-          </div>
-          {renderJob && rjob.status !== "done" && (
-            <ProgressBar label={rjob.progress.stage ?? rjob.status} done={rjob.progress.done} total={rjob.progress.total}
-              extra={rjob.progress.fps ? `· ${rjob.progress.fps.toFixed(1)} fps` : ""} />
-          )}
-          {rjob.end?.status === "error" && <div className="banner error">{rjob.end.error}</div>}
-        </section>
-        {res.timing_warnings.map((w) => <div key={w} className="banner info small">{w}</div>)}
-        {err && <div className="banner error">{err}</div>}
-      </aside>
+      <ValidationPanel projectId={project.id} res={res} selected={res.vehicles.find((v) => v.track_id === selected)} tNow={tNow} />
     </div>
   );
 }

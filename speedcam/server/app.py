@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import hashlib
 import json
 import os
 import time
@@ -11,13 +12,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import calibration as calib
-from ..config import Calibration, ProjectConfig
+from ..config import Calibration, ProjectConfig, VehicleEdits
 from ..timing import check_timing
 from ..validation import Reference, evaluate
 from . import artifacts
@@ -56,6 +57,14 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
             except OSError:
                 pass
         store.db.record_job(job.public())
+        if job.status == "done" and job.kind == "analyze":
+            try:  # new track ids: names and merges of the previous analysis no longer apply
+                cfg = store.config(job.project_id)
+                if cfg.vehicles.names or cfg.vehicles.merges:
+                    cfg.vehicles = VehicleEdits()
+                    store.save_config(job.project_id, cfg)
+            except (KeyError, OSError):
+                pass
         if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render"):
             store.refresh(job.project_id)
 
@@ -361,18 +370,17 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         n = frame if frame is not None else cfg.calibration.reference_frame
         return jobs.submit(pid, "preview", d, {"frame": n, "seconds": seconds}).public()
 
-    @app.post("/api/projects/{pid}/recompute")
-    def recompute(pid: str):
+    def _recompute(pid: str) -> dict:
         d = _dir(pid)
         if not (d / "tracks.parquet").exists():
             raise HTTPException(400, "run analysis first")
-        from ..pipeline import recompute as _recompute
+        from ..pipeline import recompute as _run
 
         # recorded like a job, so its results show (and stay downloadable) in the jobs history
         rec = {"id": uuid.uuid4().hex[:12], "project_id": pid, "kind": "recompute", "status": "running",
                "created": time.time(), "started": time.time()}
         try:
-            summary = _recompute(store.config(pid), d)
+            summary = _run(store.config(pid), d)
         except Exception as e:
             store.db.record_job({**rec, "status": "error", "finished": time.time(), "error": f"{type(e).__name__}: {e}"})
             raise
@@ -383,6 +391,10 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         store.db.record_job(rec)
         store.refresh(pid)
         return get_results(pid)
+
+    @app.post("/api/projects/{pid}/recompute")
+    def recompute(pid: str):
+        return _recompute(pid)
 
     @app.get("/api/projects/{pid}/results")
     def get_results(pid: str):
@@ -431,6 +443,240 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         if not (d / "tracks.parquet").exists():
             raise HTTPException(404, "run analysis first")
         return store.overlay(pid)
+
+    # -- vehicles: names, merges, a look at each ---------------------------------------------
+    tracks_cache: dict[str, tuple[str, dict]] = {}
+
+    def _tracks(pid: str) -> dict:
+        """Stored tracks with ground positions and the merges applied (kept while unchanged)."""
+        import numpy as np
+
+        from ..pipeline import load_tracks
+
+        d = _dir(pid)
+        if not (d / "tracks.parquet").exists():
+            raise HTTPException(400, "run analysis first")
+        data = store.load(pid)
+        cfg = ProjectConfig.model_validate(data["config"])
+        key = json.dumps([(d / "tracks.parquet").stat().st_mtime, cfg.calibration.model_dump(mode="json"),
+                          cfg.vehicles.merges, cfg.capture_fps], sort_keys=True)
+        hit = tracks_cache.get(pid)
+        if hit and hit[0] == key:
+            return hit[1]
+        info = probe_cached(data)
+        cal = calib.for_measuring(cfg.calibration, (info.width, info.height))
+        tf = np.load(d / "transforms.npz")
+        val = {"df": load_tracks(cfg, d, cal), "fps": cfg.capture_fps or info.container_fps, "cal": cal,
+               "info": info, "T_frames": tf["frames"], "T": tf["T"], "cfg": cfg}
+        tracks_cache[pid] = (key, val)
+        return val
+
+    def _patch_results(d: Path, tid: int, name: str) -> None:
+        """A new name changes no measurement: written into the results as they are."""
+        import pandas as pd
+
+        p = d / "results.json"
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            for v in data.get("vehicles", []):
+                if v["track_id"] == tid:
+                    v["name"] = name
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp.replace(p)
+        c = d / "results.csv"
+        if c.exists():
+            t = pd.read_csv(c, keep_default_na=False)
+            if "name" in t.columns:
+                t["name"] = t["name"].astype(str)
+                t.loc[t["track_id"] == tid, "name"] = name
+                t.to_csv(c, index=False, float_format="%.4f")
+
+    @app.put("/api/projects/{pid}/vehicles/{tid}")
+    def name_vehicle(pid: str, tid: int, body: dict[str, Any] = Body(...)):
+        d = _dir(pid)
+        name = " ".join(str(body.get("name") or "").split())[:60]
+        cfg = store.config(pid)
+        if name:
+            cfg.vehicles.names[tid] = name
+        else:
+            cfg.vehicles.names.pop(tid, None)
+        store.save_config(pid, cfg)
+        _patch_results(d, tid, name)
+        return {"track_id": tid, "name": name}
+
+    @app.post("/api/projects/{pid}/vehicles/merge")
+    def merge_vehicles(pid: str, body: dict[str, Any] = Body(...)):
+        """Measure these tracks as one vehicle, under the id of the one seen first."""
+        import pandas as pd
+
+        from ..vehicles import merge_groups
+
+        d = _dir(pid)
+        if not (d / "tracks.parquet").exists():
+            raise HTTPException(400, "run analysis first")
+        try:
+            ids = [int(t) for t in body.get("ids", [])]
+        except (TypeError, ValueError):
+            raise HTTPException(422, "ids: a list of track ids")
+        if len(set(ids)) < 2:
+            raise HTTPException(422, "pick two or more vehicles to merge")
+        first = pd.read_parquet(d / "tracks.parquet", columns=["track_id", "frame"]).groupby("track_id")["frame"].min()
+        missing = [t for t in ids if t not in first.index]
+        if missing:
+            raise HTTPException(404, f"no track {missing[0]}")
+        cfg = store.config(pid)
+        groups = [sorted(g, key=lambda t: (first.get(t, 1 << 62), t)) for g in merge_groups(cfg.vehicles.merges + [ids])]
+        for g in groups:  # the vehicle keeps a name given to any of its parts
+            name = next((cfg.vehicles.names[t] for t in g if cfg.vehicles.names.get(t)), "")
+            for t in g:
+                cfg.vehicles.names.pop(t, None)
+            if name:
+                cfg.vehicles.names[g[0]] = name
+        cfg.vehicles.merges = groups
+        store.save_config(pid, cfg)
+        return _recompute(pid)
+
+    @app.post("/api/projects/{pid}/vehicles/{tid}/split")
+    def split_vehicle(pid: str, tid: int):
+        """Undo a merge: its tracks are measured separately again."""
+        from ..vehicles import merge_groups
+
+        _dir(pid)
+        cfg = store.config(pid)
+        groups = merge_groups(cfg.vehicles.merges)
+        if not any(tid in g for g in groups):
+            raise HTTPException(404, f"vehicle {tid} is not merged")
+        cfg.vehicles.merges = [g for g in groups if tid not in g]
+        store.save_config(pid, cfg)
+        return _recompute(pid)
+
+    @app.get("/api/projects/{pid}/vehicles/candidates")
+    def merge_candidates(pid: str):
+        """Tracks that look like one vehicle split in two (see vehicles.merge_candidates)."""
+        from ..calibration import UNCALIBRATED
+        from ..speed import CLASSES
+        from ..vehicles import merge_candidates as find
+
+        t = _tracks(pid)
+        if t["cal"].method == UNCALIBRATED:
+            return {"pairs": [], "tracks": {}}
+        if "relevant" not in t:  # tracks that reach the measured section (crossed a line / entered a path)
+            from ..speed import compute_speeds
+
+            cal, cfg = t["cal"], t["cfg"]
+            _, renders = compute_speeds(t["df"], t["fps"], cal.line_a_world, cal.line_b_world, cfg.speed,
+                                        paths=cal.path_geoms, H=cal.H)
+            t["relevant"] = {tid for tid, r in renders.items() if r.crossed}
+        pairs = find(t["df"], t["fps"], relevant=t["relevant"])
+        res = _dir(pid) / "results.json"
+        measured = {v["track_id"]: v for v in json.loads(res.read_text(encoding="utf-8"))["vehicles"]} if res.exists() else {}
+        ids = {c["a"] for c in pairs} | {c["b"] for c in pairs}
+        df = t["df"][t["df"]["track_id"].isin(ids)]
+        tracks = {}
+        for tid, g in df.groupby("track_id"):
+            v = measured.get(int(tid))
+            tracks[str(int(tid))] = {
+                "cls": CLASSES[int(g["cls"].mode().iloc[0])], "t0": float(g["frame"].min() / t["fps"]),
+                "t1": float(g["frame"].max() / t["fps"]), "measured": v is not None,
+                "speed_max_kmh": v["speed_max_kmh"] if v else None, "name": t["cfg"].vehicles.names.get(int(tid), "")}
+        return {"pairs": pairs, "tracks": tracks}
+
+    def _look(pid: str, tid: int) -> tuple[Path, dict]:
+        """A picture of a vehicle, cut from the proxy where it's seen best, and its main colour."""
+        import cv2
+        import numpy as np
+
+        from .. import vehicles as veh
+        from ..speed import CLASSES
+        from ..video import FrameGrabber, rotate_frame
+
+        d = _dir(pid)
+        t = _tracks(pid)
+        cfg = t["cfg"]
+        proxy = d / "proxy.mp4"
+        key = hashlib.sha1(json.dumps([(d / "tracks.parquet").stat().st_mtime, cfg.vehicles.merges, cfg.rotation,
+                                       proxy.stat().st_mtime if proxy.exists() else None]).encode()).hexdigest()[:12]
+        cache = store.cache_dir(pid, "looks")
+        jpg, meta = cache / f"{tid}_{key}.jpg", cache / f"{tid}_{key}.json"
+        if jpg.exists() and meta.exists():
+            return jpg, json.loads(meta.read_text(encoding="utf-8"))
+        g = t["df"][t["df"]["track_id"] == tid]
+        if not len(g):
+            raise HTTPException(404, f"no vehicle {tid}")
+        row = veh.best_view(g)
+        n = int(row["frame"])
+        try:
+            if proxy.exists():  # quicker to seek than a 4K original; opened per look, so a rebuild can replace it
+                grab = FrameGrabber(proxy)
+                try:
+                    img = grab.get(n)
+                finally:
+                    grab.close()
+            else:
+                img = store.grabber(pid).get(n)
+        except IndexError:
+            raise HTTPException(404, f"frame {n} not readable")
+        k = int(np.clip(np.searchsorted(t["T_frames"], n), 0, max(0, len(t["T_frames"]) - 1)))
+        T = t["T"][k] if len(t["T"]) else np.eye(3)
+        quad = veh.frame_quad(row, T, img.shape[1] / t["info"].width)
+        rgb = veh.body_colour(img, quad)
+        colour = veh.colour_name(rgb)
+        pic = veh.crop(img, quad)
+        if cfg.rotation:
+            pic = rotate_frame(pic, cfg.rotation)
+        z = min(2.0, 160 / max(pic.shape[:2]))
+        pic = cv2.resize(pic, None, fx=z, fy=z, interpolation=cv2.INTER_AREA if z < 1 else cv2.INTER_CUBIC)
+        cls = CLASSES[int(g["cls"].mode().iloc[0])]
+        info = {"track_id": tid, "colour": colour, "rgb": list(rgb), "suggestion": f"{colour} {cls}", "frame": n}
+        cv2.imwrite(str(jpg), pic, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        meta.write_text(json.dumps(info), encoding="utf-8")
+        store._prune(cache, 4000)
+        return jpg, info
+
+    @app.get("/api/projects/{pid}/vehicles/{tid}/look")
+    def vehicle_look(pid: str, tid: int):
+        return _look(pid, tid)[1]
+
+    @app.get("/api/projects/{pid}/vehicles/{tid}/thumb.jpg")
+    def vehicle_thumb(pid: str, tid: int):
+        return FileResponse(_look(pid, tid)[0], media_type="image/jpeg")
+
+    # -- render preview: one frame exactly as the render draws it -----------------------------
+    prep_cache: dict[str, tuple[str, dict]] = {}
+
+    @app.post("/api/projects/{pid}/render/preview")
+    def render_preview(pid: str, frame: int = 0, max_width: int = 1600, body: Optional[dict[str, Any]] = Body(None)):
+        import cv2
+
+        from ..render import prepare, preview
+
+        d = _dir(pid)
+        if not (d / "tracks.parquet").exists():
+            raise HTTPException(400, "run analysis first")
+        cfg = store.config(pid)
+        try:
+            cfg.render = cfg.render.model_validate({**cfg.render.model_dump(), **(body or {})})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        lights = d / "lights.npz"
+        key = json.dumps([(d / "tracks.parquet").stat().st_mtime, lights.stat().st_mtime if lights.exists() else None,
+                          cfg.model_dump(mode="json", exclude={"render"})], sort_keys=True, default=str)
+        hit = prep_cache.get(pid)
+        if hit and hit[0] == key:
+            prep = hit[1]
+        else:
+            prep = prepare(cfg, d)
+            prep_cache[pid] = (key, prep)
+        try:
+            img = preview(cfg, prep, frame)
+        except IndexError as e:
+            raise HTTPException(404, str(e))
+        if img.shape[1] > max_width:
+            z = max_width / img.shape[1]
+            img = cv2.resize(img, None, fx=z, fy=z, interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/projects/{pid}/render")
     def start_render(pid: str, body: Optional[dict[str, Any]] = Body(None)):

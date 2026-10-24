@@ -76,6 +76,7 @@ export interface ProjectConfig {
   speed: Record<string, any>; render: Record<string, any>; stats: Record<string, any>;
   violations?: Record<string, any>;
   parts?: [number, number][] | null;
+  vehicles?: { names: Record<string, string>; merges: number[][] };
 }
 
 export interface Job {
@@ -115,6 +116,8 @@ export interface Vehicle {
   profile: { t: number[]; d: number[]; v: number[] } | null;
   path?: string; coverage_pct?: number;
   violations?: string[];
+  /** the user's name for it ("" = none); the tracks merged into it (first = this id) */
+  name?: string; merged?: number[];
   // margin of error (k=2, ~95 %); *_u_lower adds the one-sided uncorrected parallax bias below the value
   speed_avg_se_kmh?: number | null;
   speed_max_u_kmh?: number; speed_max_u_lower_kmh?: number; speed_avg_u_kmh?: number; speed_avg_u_lower_kmh?: number;
@@ -157,6 +160,17 @@ export interface Stats {
   min?: number; max?: number; required_n?: Record<string, number>; confidence: number; permitted_error_kmh: number;
 }
 
+/** Two tracks that look like one vehicle the tracker lost for a moment. */
+export interface MergePair {
+  a: number; b: number; gap_s: number; miss_m: number; speed_kmh: number; speed_change_kmh: number; likely: boolean;
+  t_a_end_s: number; t_b_start_s: number;
+}
+export interface MergeCandidates {
+  pairs: MergePair[];
+  tracks: Record<string, { cls: string; t0: number; t1: number; measured: boolean; speed_max_kmh: number | null; name: string }>;
+}
+export interface VehicleLook { track_id: number; colour: string; rgb: [number, number, number]; suggestion: string; frame: number }
+
 export interface Phase { t0: number; t1: number; state: "red" | "amber" | "green" | "not red" | "unknown" }
 export interface RedLightEvent {
   type: "red_light"; name: string; line: number; track_id: number; class: string; t_s: number; t_centre_s: number;
@@ -196,7 +210,8 @@ export interface Results {
   calibration_check?: { n: number; status: "ok" | "suspect" | "insufficient"; mean_pct?: number; sd_pct?: number; message?: string };
   violations?: Violations | null;
   run: Record<string, any>; calibration: CalibrationResult;
-  render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string } | null;
+  render: { file: string; output_fps: number; playback_speed: number; capture_fps: number; mode: string;
+    width?: number; height?: number; frames?: number; parts?: [number, number][] | null } | null;
 }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -240,6 +255,25 @@ export const api = {
     req<Job>("POST", `/api/projects/${id}/preview?frame=${frame}&seconds=${seconds}`),
   recompute: (id: string) => req<Results>("POST", `/api/projects/${id}/recompute`),
   render: (id: string, settings: Record<string, unknown>) => req<Job>("POST", `/api/projects/${id}/render`, settings),
+  nameVehicle: (id: string, tid: number, name: string) =>
+    req<{ track_id: number; name: string }>("PUT", `/api/projects/${id}/vehicles/${tid}`, { name }),
+  mergeVehicles: (id: string, ids: number[]) => req<Results>("POST", `/api/projects/${id}/vehicles/merge`, { ids }),
+  splitVehicle: (id: string, tid: number) => req<Results>("POST", `/api/projects/${id}/vehicles/${tid}/split`),
+  mergeCandidates: (id: string) => req<MergeCandidates>("GET", `/api/projects/${id}/vehicles/candidates`),
+  vehicleLook: (id: string, tid: number) => req<VehicleLook>("GET", `/api/projects/${id}/vehicles/${tid}/look`),
+  vehicleThumbUrl: (id: string, tid: number, v = "") => `/api/projects/${id}/vehicles/${tid}/thumb.jpg${v ? `?v=${v}` : ""}`,
+  /** one output frame as the render would draw it with these (unsaved) settings */
+  renderPreview: async (id: string, frame: number, settings: Record<string, unknown>, signal?: AbortSignal): Promise<Blob> => {
+    const r = await fetch(`/api/projects/${id}/render/preview?frame=${frame}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings), signal,
+    });
+    if (!r.ok) {
+      let msg = `${r.status} ${r.statusText}`;
+      try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail ?? j); } catch { /* not json */ }
+      throw new Error(msg);
+    }
+    return r.blob();
+  },
   overlay: (id: string) => fetch(`/api/projects/${id}/overlay`).then((r) => (r.ok ? r.json() : null)),
   results: (id: string) => req<Results>("GET", `/api/projects/${id}/results`),
   validation: (id: string) => req<Validation>("GET", `/api/projects/${id}/validation`),

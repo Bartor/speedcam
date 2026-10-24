@@ -15,8 +15,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import calibration, scan, uncertainty, violations
-from .config import ProjectConfig
+from . import calibration, scan, uncertainty, vehicles, violations
+from .config import ProjectConfig, VehicleEdits
 from .detection import make_detector
 from .flow import FlowTracker, reference_positions
 from .speed import calibration_check, compute_speeds
@@ -366,6 +366,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         violations.save_samples(out, violations.lights_key(cfg.calibration, cfg.violations), light_frames, light_counts)
 
     reporter.progress("computing speeds", 0, 1)
+    cfg = cfg.model_copy(update={"vehicles": VehicleEdits()})  # new track ids: earlier names and merges don't apply
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms, H=cal.H)
     budget = margin_of_error(cfg, results, renders, cal, fps)
@@ -410,7 +411,7 @@ def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal,
 
 def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps: float, cal,
                   timing_msgs: list[str], budget: Optional[dict], viol: Optional[dict], run: dict) -> dict:
-    cols = ["track_id", "class", "path", "direction", "coverage_pct", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
+    cols = ["track_id", "name", "merged", "class", "path", "direction", "coverage_pct", "t_entry_s", "t_exit_s", "frame_entry", "frame_exit", "dt_s",
             "path_length_m", "chord_m", "speed_kmh", "speed_avg_u_kmh", "speed_avg_u_lower_kmh",
             "speed_max_kmh", "speed_max_u_kmh", "speed_max_u_lower_kmh", "speed_min_kmh", "speed_sigma_kmh",
             "speed_avg_se_kmh", "u_pct", "u_cal_pct", "u_parallax_pct",
@@ -424,14 +425,18 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
             tags.setdefault(e["track_id"], []).append(f"red light ({e['name']})")
     for e in (viol or {}).get("solid_line", []):
         tags.setdefault(e["track_id"], []).append(f"solid line ({e['name']})")
+    groups = {g[0]: g for g in vehicles.merge_groups(cfg.vehicles.merges)}
     for r in results:
         r["violations"] = tags.get(r["track_id"], [])
+        r["name"] = cfg.vehicles.names.get(r["track_id"], "")
+        r["merged"] = groups.get(r["track_id"], [])
     if viol:
         violations.write_csv(out, viol)
     elif (out / "violations.csv").exists():
         (out / "violations.csv").unlink()
     table = pd.DataFrame(results, columns=cols)
     table["violations"] = table["violations"].map(lambda v: "; ".join(v) if isinstance(v, list) else "")
+    table["merged"] = table["merged"].map(lambda v: "+".join(map(str, v)) if isinstance(v, list) else "")
     table.to_csv(out / "results.csv", index=False, float_format="%.4f")
     valid = [r for r in results if r["valid"]]
     # averages only from vehicles whose average is conclusive (no gap or jump in the stretch)
@@ -473,15 +478,21 @@ def write_results(out: Path, cfg: ProjectConfig, results: list[dict], info, fps:
     return summary
 
 
+def load_tracks(cfg: ProjectConfig, out: Path, cal) -> pd.DataFrame:
+    """Stored tracks with ground positions for the current calibration and the user's merges."""
+    df = pd.read_parquet(out / "tracks.parquet")
+    world = calibration.apply_h(cal.H, reference_positions(df))
+    df["x_m"], df["y_m"] = world[:, 0], world[:, 1]
+    return vehicles.apply_merges(df, cfg.vehicles.merges)
+
+
 def recompute(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     """Re-run speed estimation from stored tracks (e.g. after changing lines or thresholds)."""
     out = Path(out_dir)
     info = probe(cfg.source)
     fps = resolve_capture_fps(cfg, info, Reporter())
     cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
-    df = pd.read_parquet(out / "tracks.parquet")
-    world = calibration.apply_h(cal.H, reference_positions(df))
-    df["x_m"], df["y_m"] = world[:, 0], world[:, 1]
+    df = load_tracks(cfg, out, cal)
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms, H=cal.H)
     prev = json.loads((out / "results.json").read_text(encoding="utf-8")) if (out / "results.json").exists() else {}

@@ -107,9 +107,42 @@ export const HELP: Record<string, { title: string; body: string[] }> = {
     title: "Violations",
     body: ["Red-light runs and solid-line crossings, with the light's phase timeline. Click a row to watch it. Change the lines or settings on the Calibrate screen, then Recompute."],
   },
-  "results.render": {
-    title: "Rendered video",
-    body: ["An MP4 for sharing: speed labels on vehicles, the lines or paths, and an optional side panel listing each vehicle's max speed. The advanced settings set the resolution, frame rate, colour LUT and the panel's details."],
+  "results.vehicle": {
+    title: "Vehicle",
+    body: [
+      "The vehicle picked in the list or on the timeline. Give it a name to find it again; it shows in the list, the downloads and (if you like) the rendered video. The suggestion comes from its colour seen from above, so it's the roof's colour.",
+      "If the tracker lost it for a moment (behind a tree, a sign or a bus) and picked it up under a new number, merge the two: they're measured as one vehicle. Nothing is measured across the gap, so the average becomes inconclusive, but the max from the cleanly tracked frames on either side stands. Split undoes it.",
+    ],
+  },
+  "results.splits": {
+    title: "Possibly split vehicles",
+    body: ["Tracks that start shortly after another one ended, heading the same way, where that one would have got to at its speed: likely one vehicle under two numbers. Watch the hand-over, then merge if it's the same vehicle."],
+  },
+  "export.preview": {
+    title: "Preview",
+    body: ["Any frame of the clip drawn exactly as the render will draw it, with the settings on the right: pick a frame on the timeline. The vehicle lane shows where the measured vehicles are."],
+  },
+  "export.range": {
+    title: "What to render",
+    body: [
+      "The whole clip, the parts that were analysed, just the measured vehicles or the violations (each with a little lead-in), or any ranges you pick on the timeline's bottom lane.",
+      "The parts are rendered back to back into one video.",
+    ],
+  },
+  "export.quality": {
+    title: "Quality",
+    body: [
+      "Resolution and frame rate of the video, how fast it plays (0.5× and slower are slow motion, smooth with high-frame-rate footage), and the encoder's quality: lower numbers are better and bigger.",
+      "A GPU encoder (NVIDIA or Apple) is much faster than x264. The colour LUT turns flat log footage (e.g. D-Log M) into normal colours.",
+    ],
+  },
+  "export.overlay": {
+    title: "On the video",
+    body: ["What's drawn over the picture. Violation labels always show. Put labels on the side of the vehicles away from neighbouring lanes, so they don't cover other cars."],
+  },
+  "export.panel": {
+    title: "Side panel",
+    body: ["A leaderboard for sharing: the speed limit, totals, the last vehicle's speed along the section and a list of every vehicle's max speed as it crosses the second line. Over the video keeps the picture's size; beside it makes the video wider."],
   },
   "results.validation": {
     title: "Validation run",

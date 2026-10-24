@@ -4,16 +4,18 @@ import ImportScreen from "./screens/ImportScreen";
 import CalibrateScreen from "./screens/CalibrateScreen";
 import ProcessScreen from "./screens/ProcessScreen";
 import ResultsScreen from "./screens/ResultsScreen";
+import ExportScreen from "./screens/ExportScreen";
 import JobsIndicator from "./components/JobsIndicator";
 import JobsPage from "./screens/JobsPage";
 import Tutorial, { tutorialPending } from "./components/Tutorial";
 
-export type Screen = "import" | "calibrate" | "process" | "results";
+export type Screen = "import" | "calibrate" | "process" | "results" | "export";
 const SCREENS: { key: Screen; label: string }[] = [
   { key: "import", label: "Import" },
   { key: "calibrate", label: "Calibrate" },
   { key: "process", label: "Process" },
   { key: "results", label: "Results" },
+  { key: "export", label: "Export" },
 ];
 
 /** Which steps already have their output, so the nav reads as a progression. */
@@ -27,7 +29,8 @@ function stepDone(p: Project | null, s: Screen): boolean {
       return !!(((c.paths ?? []).some((pp) => pp.points.length >= 2) || (c.line_a && c.line_b) || rules) && !p.calibration_result.error && p.calibration_result.fit_ok !== false);
     }
     case "process": return !!p.status.results_json;
-    case "results": return !!p.status.render_mp4;
+    case "results": return !!p.status.results_json;
+    case "export": return !!p.status.render_mp4;
   }
 }
 
@@ -89,8 +92,9 @@ export default function App() {
               return (
                 <li key={s.key} className={done ? "done" : ""}>
                   <button className={`step${active ? " active" : ""}${done ? " done" : ""}`} aria-current={active ? "step" : undefined}
-                    disabled={!p && s.key !== "import"} onClick={() => go(s.key)}>
-                    <span className="step-num">{done && !active ? "✓" : i + 1}</span>{s.label}
+                    disabled={(!p && s.key !== "import") || (s.key === "export" && !!p && !p.status.results_json)}
+                    title={s.key === "export" && p && !p.status.results_json ? "Analyse the clip first" : s.label} onClick={() => go(s.key)}>
+                    <span className="step-num">{done && !active ? "✓" : i + 1}</span><span className="step-label">{s.label}</span>
                   </button>
                 </li>
               );
@@ -99,7 +103,7 @@ export default function App() {
         </nav>
         <div className="project-name" title={p?.name}>{p ? p.name : ""}</div>
         <a className={`jobs-link${route.jobs ? " active" : ""}`} href="#/jobs" title="Every job, with the files each one produced">Jobs</a>
-        <button className="tutorial-link" onClick={() => setTutorial(true)} title="A short walk through the four steps">Tutorial</button>
+        <button className="tutorial-link" onClick={() => setTutorial(true)} title="A short walk through the steps">Tutorial</button>
         <JobsIndicator />
       </header>
       {error && <div className="banner error">{error}</div>}
@@ -111,7 +115,8 @@ export default function App() {
         )}
         {p && route.screen === "calibrate" && <CalibrateScreen project={p} onChanged={setProject} onNext={() => go("process")} />}
         {p && route.screen === "process" && <ProcessScreen project={p} onChanged={setProject} onDone={() => go("results")} />}
-        {p && route.screen === "results" && <ResultsScreen project={p} onChanged={setProject} />}
+        {p && route.screen === "results" && <ResultsScreen project={p} onChanged={setProject} onExport={() => go("export")} />}
+        {p && route.screen === "export" && <ExportScreen project={p} onChanged={setProject} />}
       </main>
       <Tutorial open={tutorial} onClose={() => setTutorial(false)} />
     </div>

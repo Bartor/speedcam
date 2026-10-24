@@ -195,7 +195,7 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    rotation is set from the flag, so they show upright. The proxy and the render
    ignore the flag too, so picture and overlay always line up. Projects made before
    this rebuild their proxy once when opened, with nothing to re-analyse.
-   **Timeline** (Calibrate, Process and Results): a scrubbable view of the whole clip
+   **Timeline** (Calibrate, Process, Results and Export): a scrubbable view of the whole clip
    with a time ruler, frame thumbnails (hover for a bigger preview), the activity scan
    and the parts to analyse; on Results also each measured vehicle (click to jump to
    it). Drag on the bottom lane to cut a stretch out (starting over blue) or add one back
@@ -272,39 +272,73 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    lines A/B. It also reports how many tracks crossed each line. Use it to check
    settings before the full run, which streams the same tracking preview and can be
    cancelled.
-4. **Results:** the proxy video, with a live tracking overlay drawn in the browser
-   (boxes, trails, momentary speed between the lines, then max and average),
-   sits beside the vehicle table. No render is needed for review. Each vehicle has a
-   **max** (highest momentary speed between A and B) and an **average** (A→B).
-   Click a row to seek to it and plot its **speed along the section**: the momentary
-   speed curve with max/min marked, a ±2σ noise band, and the average and speed-limit
-   lines. Statistics and the histogram switch between max and average. They include
+4. **Results:** a dashboard. The proxy video, with a live tracking overlay drawn in
+   the browser (boxes, trails, momentary speed between the lines, then max and average),
+   has the list of measured vehicles beside it: a picture of each, its name, max and
+   average speed, and marks for violations (⛔), merged tracks (⧉), an inconclusive
+   average (~) or an invalid measurement (✕). No render is needed for review. Each
+   vehicle has a **max** (highest momentary speed between A and B) and an **average**
+   (A→B). Pick one in the list or on the timeline's vehicle lane to seek to it and plot
+   its **speed along the section** below the video: the momentary speed curve with
+   max/min marked, a ±2σ noise band, the average and speed-limit lines, and its
+   violations marked where they happened (click a mark to watch it, or anywhere on the
+   curve to jump there).
+   **Vehicle card**, beside the graph: give the vehicle a name to find it again (it goes
+   into the list, `results.csv`/`.json` and, optionally, the rendered video). The app
+   suggests one from the vehicle's colour, read from the middle of its box where it's
+   seen best, so from above it's the roof's colour ("white car", "blue truck"); makes and
+   models aren't recognised. **Merge** fixes a vehicle the tracker split in two: when it
+   loses a vehicle (behind a tree, a sign or a bus) it picks it up again under a new
+   number, so one car becomes two tracks, neither may cover the whole section, and one
+   that does can be counted twice. The card lists tracks that continue this one: starting
+   up to 3 s after it ends, heading the same way, where it would have got to at its speed
+   (within a box length plus drift), at a similar speed. *Possibly split vehicles* lists
+   every likely pair in the clip that reaches the measured section. Merged tracks are
+   measured as one under the first one's number; nothing is measured across the gap, so
+   the average becomes inconclusive when the gap is longer than 0.3 s, while the max from
+   the cleanly tracked frames on either side stands. *Split* undoes it; the stored tracks
+   are never changed. A merge re-measures the clip (like Recompute), and a new analysis
+   drops names and merges, since its track numbers are new.
+   Statistics and the histogram switch between max and average. They include
    mean, p85 and p95 with confidence intervals, plus the ITE sample size needed
    against the valid n. A **calibration check** warns when every vehicle's speed
    rises or falls by the same share along A→B. Drivers vary but geometry doesn't, so
    a shared trend means a calibration error that biases max speeds. If nothing was
-   measured, the page says where tracks were lost. Export CSV, JSON and MP4.
+   measured, the page says where tracks were lost. *All measurements* folds out the
+   full table with every column.
    **Recompute** re-runs the speed and violation steps, without re-detecting.
    With violation checks, a **Violations** panel shows each light's phase timeline
    (red/amber/green, with the runs marked) and lists every red-light run and
    solid-line crossing with its time, vehicle and speed. Click one to watch it. The
    overlay colours stop lines and lights by the current phase and tags violating
-   vehicles, and `violations.csv` lists them. The vehicle table marks them too.
-5. **Render:** an annotated MP4 for sharing. Vehicles get speed pills (live
-   momentary speed between the lines, then max, coloured against the limit). An
-   optional side panel (left or right, over the 16:9 frame or beside it) shows:
-   a title and subtitle, a speed-limit sign, running totals (vehicles, over the
-   limit, top speed, p85), the latest vehicle's speed curve, and the list of
-   vehicles with their max and average speeds, latest or fastest first. Stop lines
-   and lights are drawn in the phase's colour, and violating vehicles get a red box
-   and a RED LIGHT / SOLID LINE pill. A footer is
-   optional. **Speed labels** go above, below, left or right of each vehicle (as seen
-   in the output): pick the side away from neighbouring lanes and lines. Text uses Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any
-   `.ttf` set in `render.font`.
+   vehicles, and `violations.csv` lists them.
+5. **Export:** the annotated MP4 for sharing, and the data downloads (CSV, JSON,
+   violations). A **preview** shows any frame exactly as the render will draw it with
+   the current settings (pick the frame on the timeline); settings are kept with the
+   project as you change them. **What to render:** the whole clip, the analysed parts,
+   only the measured vehicles (each from 1 s before it until its label goes), only the
+   violations (3 s either side), or ranges picked on the timeline's bottom lane (drag,
+   or I / O). The parts are rendered back to back. **Quality:** resolution (720p up to
+   the original), frame rate, playback speed (down to 0.1× slow motion), encoder
+   quality, encoder (NVIDIA, Apple or x264; automatic picks a GPU one when it works),
+   stabilized or as-filmed frames, and a colour LUT (`.cube`, e.g. D-Log M → Rec.709).
+   **On the video:** speed labels, vehicle names, boxes, trails, paths / lines A–B,
+   lights and solid lines, unmeasured vehicles and a time readout can each be switched
+   off; violation labels always show. Vehicles get speed pills (live momentary speed
+   between the lines, then max, coloured against the limit), above, below, left or right
+   of each vehicle (as seen in the output): pick the side away from neighbouring lanes
+   and lines. How long the max label stays and the trail length are set here too. An
+   optional **side panel** (left or right, over the frame or beside it, in three widths)
+   shows a title and subtitle, a speed-limit sign, running totals (vehicles, over the
+   limit, top speed, p85), the latest vehicle's speed curve, and the list of vehicles
+   (by name, if they have one) with their max and average speeds, latest or fastest
+   first, and an optional footer. Stop lines and lights are drawn in the phase's colour,
+   and violating vehicles get a red box and a RED LIGHT / SOLID LINE pill. Text uses
+   Segoe UI and Bahnschrift (Windows) or DejaVu Sans, or any `.ttf` set in `render.font`.
 
 The API lives under `/api` (OpenAPI at `/docs`). It covers projects, frames,
-`proxy.mp4` with range requests, calibration, analyze, render, results, job
-events (SSE) and cancel.
+`proxy.mp4` with range requests, calibration, analyze, render (and one-frame render
+previews), results, vehicle names, merges and pictures, job events (SSE) and cancel.
 
 For frontend development, run `npm run dev` in `web/`. Vite proxies `/api` to
 port 8000.

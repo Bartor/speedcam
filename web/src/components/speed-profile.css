@@ -29,6 +29,11 @@
 }
 .sprof-tip b { color: var(--text); margin-right: 2px; }
 .sprof-foot { margin-top: var(--s-2); }
+.sprof .viol-line { stroke: var(--critical); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.sprof .viol-band { fill: var(--critical); opacity: .12; }
+.sprof .viol-mark { fill: var(--critical); stroke: var(--surface); stroke-width: 1.5; }
+.sprof .viol-label { fill: var(--critical); font-size: 11.5px; font-weight: 650; }
+.sprof .viol:hover .viol-line { stroke-dasharray: none; }
 .calib-check { margin-bottom: var(--s-3); }
 tr.selected td { background: var(--accent-soft); }
 .subhead { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: var(--s-4) 0 var(--s-2); }

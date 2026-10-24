@@ -15,7 +15,7 @@ export const SHORTCUTS: [string, string][] = [
   ["Shift + wheel", "Move the playhead frame by frame"],
   ["+ / −", "Zoom in / out at the playhead"],
   ["\\", "Fit the whole clip"],
-  ["I / O", "In point / out point: adds that range to the analysis"],
+  ["I / O", "In point / out point: adds that range (to analyse, or on Export to render)"],
   ["Drag on the parts lane", "Cut out (starting over blue) or add back (elsewhere)"],
   ["?", "Show these shortcuts"],
 ];
@@ -31,9 +31,13 @@ interface Props {
   vehicles?: TimelineVehicle[];
   selectedVehicle?: number | null;
   onPickVehicle?: (id: number) => void;
+  /** the parts lane edits these ranges instead of the analysed parts (Export: what to render) */
+  ranges?: Range[] | null;
+  onRanges?: (r: Range[] | null) => void;
+  verb?: string; // what the parts are for: "Analyse", "Render"
 }
 
-type Range = [number, number];
+export type Range = [number, number];
 
 // lane layout (px)
 const RULER = 18, FILM = 46, ACT = 26, PARTS = 20, VEH = 16, GAP = 2;
@@ -77,7 +81,8 @@ const inside = (rs: Range[], f: number) => rs.some(([a, b]) => f >= a && f < b);
  * to analyse (drag to add or cut out, drag edges, I / O keys) and, on the results, the vehicles.
  * Wheel zooms around the cursor, Shift+wheel pans. Frames are video frames; times are real
  * seconds (frame / capture fps). */
-export default function Timeline({ project, frame, onSeek, onProjectChange, editable = true, vehicles, selectedVehicle, onPickVehicle }: Props) {
+export default function Timeline({ project, frame, onSeek, onProjectChange, editable = true, vehicles, selectedVehicle, onPickVehicle,
+  ranges, onRanges, verb = "Analyse" }: Props) {
   const nb = Math.max(1, project.info.nb_frames);
   const fps = project.config.capture_fps || project.info.container_fps;
   const wrap = useRef<HTMLDivElement>(null);
@@ -88,7 +93,7 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
   const [sprite, setSprite] = useState<{ img: HTMLImageElement; count: number; tw: number } | null>(null);
   const [hover, setHover] = useState<{ x: number; f: number } | null>(null);
   const [inPoint, setInPoint] = useState<number | null>(null);
-  const saved = project.config.parts ?? null;
+  const saved = onRanges ? ranges ?? null : project.config.parts ?? null;
   const [parts, setParts] = useState<Range[]>(saved ? norm(saved as Range[], nb) : [[0, nb]]);
   const drag = useRef<null | { kind: "scrub" } | { kind: "paint"; a: number; b: number; mode: "add" | "cut" } | { kind: "edge"; i: number; side: 0 | 1 }>(null);
   const [, redraw] = useState(0);
@@ -140,6 +145,10 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
     const n = norm(next, nb);
     if (!n.length) { tick(); return; }  // cutting out everything would leave nothing to analyse
     setParts(n);
+    if (onRanges) {
+      onRanges(n.length === 1 && n[0][0] <= 0 && n[0][1] >= nb ? null : n);
+      return;
+    }
     window.clearTimeout(save.current);
     save.current = window.setTimeout(async () => {
       const all = n.length === 1 && n[0][0] <= 0 && n[0][1] >= nb;
@@ -239,7 +248,7 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
       if (xb > xa) g.fillRect(xa, lanes.film[0], xb - xa, lanes.act[0] + ACT - lanes.film[0]);
     });
     g.fillStyle = "rgba(255,255,255,.8)"; g.font = "600 10px system-ui, sans-serif"; g.textBaseline = "middle";
-    if (allIn) g.fillText("Analyse: whole clip", 6, py + ph / 2);
+    if (allIn) g.fillText(`${verb}: whole clip`, 6, py + ph / 2);
 
     // vehicles
     if (lanes.veh && vehicles) {
@@ -433,10 +442,10 @@ export default function Timeline({ project, frame, onSeek, onProjectChange, edit
         <span className="grow" />
         {editable && <>
           <span className="muted" title="Drag on the bottom lane: over blue to cut out, elsewhere to add. Drag a part's edge to adjust. I / O set in and out points at the playhead.">
-            {allIn ? "Analysing the whole clip" : `Analysing ${parts.length} part${parts.length === 1 ? "" : "s"}, ${clock(covered / fps)} of ${clock(nb / fps)}`}
+            {allIn ? `${verb}: the whole clip` : `${verb}: ${parts.length} part${parts.length === 1 ? "" : "s"}, ${clock(covered / fps)} of ${clock(nb / fps)}`}
           </span>
-          {suggested.length > 0 && <button className="chip" onClick={() => commit(suggested as Range[])} title="The parts with moving vehicles found by the activity scan">Use activity</button>}
-          {!allIn && <button className="chip" onClick={() => commit([[0, nb]])} title="Analyse the whole clip again">Analyse all</button>}
+          {!onRanges && suggested.length > 0 && <button className="chip" onClick={() => commit(suggested as Range[])} title="The parts with moving vehicles found by the activity scan">Use activity</button>}
+          {!allIn && <button className="chip" onClick={() => commit([[0, nb]])} title={`${verb} the whole clip`}>{verb} all</button>}
         </>}
         <button className="chip" onClick={() => zoom(0.5)} title="Zoom in (wheel)">+</button>
         <button className="chip" onClick={() => zoom(2)} title="Zoom out (wheel)">−</button>

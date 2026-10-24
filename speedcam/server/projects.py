@@ -26,9 +26,9 @@ from .db import Database
 ID_RE = re.compile(r"^[a-z0-9-]{1,80}$")
 OUTPUT_FILES = {"proxy.mp4", "render.mp4", "results.csv", "results.json", "tracks.parquet",
                 "stabilization.csv", "render.json", "validation.json", "violations.csv"}
-SCREENS = {"import", "calibrate", "process", "results"}
+SCREENS = {"import", "calibrate", "process", "results", "export"}
 FRAME_CACHE_MAX = 400  # decoded full-res frames kept on disk per project
-OVERLAY_VERSION = 6  # bump when overlay_data() output changes, so cached copies are rebuilt
+OVERLAY_VERSION = 7  # bump when overlay_data() output changes, so cached copies are rebuilt
 
 
 class ProjectStore:
@@ -276,6 +276,7 @@ class ProjectStore:
             "cal": cfg.calibration.model_dump(mode="json"), "speed": cfg.speed.model_dump(mode="json"),
             "fps": cfg.capture_fps, "limit": cfg.render.speed_limit_kmh, "trail": cfg.render.trail_s,
             "violations": cfg.violations.model_dump(mode="json"),
+            "vehicles": cfg.vehicles.model_dump(mode="json"),
             "lights": (d / "lights.npz").stat().st_mtime if (d / "lights.npz").exists() else None,
         }, sort_keys=True)
         key = hashlib.sha1(key_src.encode()).hexdigest()

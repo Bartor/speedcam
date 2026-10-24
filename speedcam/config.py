@@ -301,6 +301,16 @@ class RenderSettings(BaseModel):
     # the side away from neighbouring lanes and lines: e.g. left/right when traffic runs across
     label_position: Literal["above", "below", "left", "right"] = "above"
     only_parts: bool = True  # when the analysis covers only some parts, render only those
+    # frame ranges [start, end) to render, picked on the Export timeline; None = the whole video
+    # (or the analysed parts, with only_parts)
+    ranges: Optional[list[tuple[int, int]]] = None
+    # what is drawn
+    show_lines: bool = True  # paths of motion / lines A and B
+    show_rules: bool = True  # traffic lights, stop lines and solid lines
+    show_boxes: bool = True
+    show_trails: bool = True
+    show_labels: bool = True  # speed labels on the vehicles (violation labels always show)
+    show_names: bool = True  # vehicle names (set on Results) in labels and the panel
     speed_limit_kmh: float = 50.0
     # presentation (social media): side panel listing every vehicle's max speed as it finishes
     panel: Literal["none", "right", "left"] = "right"
@@ -338,6 +348,16 @@ class UncertaintySettings(BaseModel):
     mc_samples: int = 200
 
 
+class VehicleEdits(BaseModel):
+    """The user's corrections to the vehicles of an analysis. Track ids belong to that analysis,
+    so a new analysis starts with none."""
+
+    names: dict[int, str] = Field(default_factory=dict)  # by (merged) track id, e.g. "red hatchback"
+    # tracks that are one vehicle (the tracker lost it and started a new id): each group is
+    # measured as one track, under its first id; the stored tracks are left as they were
+    merges: list[list[int]] = Field(default_factory=list)
+
+
 class ProjectConfig(BaseModel):
     source: str
     # how the video is shown, previewed and rendered: degrees clockwise. View only: analysis and
@@ -361,6 +381,7 @@ class ProjectConfig(BaseModel):
     # parts of the video to analyse, frame ranges [start, end) (e.g. from the activity scan);
     # None = all of it (within start_frame/end_frame)
     parts: Optional[list[tuple[int, int]]] = None
+    vehicles: VehicleEdits = Field(default_factory=VehicleEdits)
 
 
 def load_config(path: str | Path) -> ProjectConfig:

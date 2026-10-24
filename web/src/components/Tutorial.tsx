@@ -7,7 +7,7 @@ const STEPS: { title: string; body: string[]; tip?: string }[] = [
     title: "Welcome to speedcam",
     body: [
       "speedcam measures vehicle speeds in drone footage, and can check red-light running and solid-line crossings. Everything runs on this computer; no video leaves it.",
-      "A project goes through four steps, shown at the top: Import → Calibrate → Process → Results.",
+      "A project goes through five steps, shown at the top: Import → Calibrate → Process → Results → Export.",
     ],
     tip: "This takes a minute. You can skip it and reopen it any time from Tutorial in the top bar.",
   },
@@ -36,8 +36,15 @@ const STEPS: { title: string; body: string[]; tip?: string }[] = [
   {
     title: "4 · Results",
     body: [
-      "The video with a live overlay, every vehicle's max and average speed with its margin of error, statistics (mean, p85), and any violations.",
-      "Changed a line, path or threshold? Press Recompute: no new analysis. Render an annotated MP4 to share, and download CSV/JSON.",
+      "The video with a live overlay and the list of measured vehicles beside it: pick one to see its speed along the section, with any violations marked. Name vehicles, and merge one the tracker split in two.",
+      "Statistics (mean, p85), violations and margins of error below. Changed a line, path or threshold? Press Recompute: no new analysis.",
+    ],
+  },
+  {
+    title: "5 · Export",
+    body: [
+      "Render an annotated MP4 to share: choose what to render on the timeline (the whole clip, only the measured vehicles, the violations), what's drawn, the side panel and the quality, with a preview of any frame as it will look.",
+      "Download the results as CSV or JSON there too.",
     ],
     tip: "Every section has a ? button with a short explanation.",
   },

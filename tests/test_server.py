@@ -258,6 +258,87 @@ def test_tracking_only_then_calibrate_and_recompute(tmp_path):
     assert res["vehicles"][0]["speed_kmh"] == pytest.approx(70.0, rel=0.005)
 
 
+@pytest.mark.slow
+def test_vehicle_names_merges_looks_and_render_preview(tmp_path):
+    """A car the tracker lost for a moment (two ids) is found as a likely split, merged into one
+    measured vehicle (max intact, average inconclusive across the gap), named, pictured, and
+    split again. The Export preview draws one frame with unsaved settings."""
+    import cv2
+    import numpy as np
+    import pandas as pd
+
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=70.0, size=(640, 360), m_per_px=0.1)
+    client = TestClient(create_app(tmp_path / "projects"))
+    p = client.post("/api/projects", json={"source": cfg.source}).json()
+    pid = p["id"]
+    assert _wait(client, p["proxy_job"])["status"] == "done"
+    client.patch(f"/api/projects/{pid}", json={"capture_fps": 120, "detection": {"type": "blob"}})
+    client.put(f"/api/projects/{pid}/calibration", json=cfg.calibration.model_dump(mode="json"))
+    assert _wait(client, client.post(f"/api/projects/{pid}/analyze").json()["id"])["status"] == "done"
+    tid = client.get(f"/api/projects/{pid}/results").json()["vehicles"][0]["track_id"]
+
+    # break the track: 0.5 s missing (longer than speed.max_gap_s) early on, a new id after it. (The
+    # synthetic section is only 1.2 s long: a gap in its middle would leave too little clean
+    # tracking for a max, which is right, but not what this test is about.)
+    d = tmp_path / "projects" / pid
+    df = pd.read_parquet(d / "tracks.parquet")
+    f = df.loc[df["track_id"] == tid, "frame"]
+    mid = int(f.quantile(0.3))
+    df = df[~((df["track_id"] == tid) & df["frame"].between(mid, mid + 59))].copy()
+    df.loc[(df["track_id"] == tid) & (df["frame"] > mid), "track_id"] = 900
+    df.to_parquet(d / "tracks.parquet", index=False)
+    res = client.post(f"/api/projects/{pid}/recompute").json()
+    assert not any(v["valid"] and v["track_id"] in (tid, 900) for v in res["vehicles"])
+
+    cand = client.get(f"/api/projects/{pid}/vehicles/candidates").json()
+    pair = next(c for c in cand["pairs"] if c["likely"])
+    assert (pair["a"], pair["b"]) == (tid, 900) and pair["gap_s"] == pytest.approx(61 / 120, abs=0.01)
+    assert cand["tracks"][str(tid)]["cls"] == "car"
+
+    client.put(f"/api/projects/{pid}/vehicles/900", json={"name": "  red   test car "})
+    res = client.post(f"/api/projects/{pid}/vehicles/merge", json={"ids": [900, tid]}).json()
+    v = next(v for v in res["vehicles"] if v["track_id"] == tid)  # under the id seen first
+    assert v["merged"] == [tid, 900] and v["name"] == "red test car"  # the name moves with it
+    assert v["valid"] and v["speed_max_kmh"] == pytest.approx(70.0, rel=0.02)
+    assert v["avg_valid"] is False and "gap" in v["flags"]  # nothing measured across the gap
+    proj = client.get(f"/api/projects/{pid}").json()
+    assert proj["config"]["vehicles"] == {"names": {str(tid): "red test car"}, "merges": [[tid, 900]]}
+    assert "red test car" in client.get(f"/api/projects/{pid}/files/results.csv").text
+
+    client.put(f"/api/projects/{pid}/vehicles/{tid}", json={"name": "blue van"})
+    assert client.get(f"/api/projects/{pid}/results").json()["vehicles"][0]["name"] == "blue van"
+    assert "blue van" in client.get(f"/api/projects/{pid}/files/results.csv").text
+
+    look = client.get(f"/api/projects/{pid}/vehicles/{tid}/look").json()
+    assert look["colour"] and look["suggestion"].endswith(" car")
+    thumb = client.get(f"/api/projects/{pid}/vehicles/{tid}/thumb.jpg")
+    assert thumb.status_code == 200 and cv2.imdecode(np.frombuffer(thumb.content, np.uint8), 1).size > 0
+
+    frame = int((v["t_entry_s"] + 0.1) * 120)
+    pv = client.post(f"/api/projects/{pid}/render/preview?frame={frame}", json={"panel": "none", "scale": 0.5})
+    assert pv.status_code == 200 and pv.headers["content-type"] == "image/jpeg"
+    img = cv2.imdecode(np.frombuffer(pv.content, np.uint8), 1)
+    assert img.shape[:2] == (180, 320)
+    wide = client.post(f"/api/projects/{pid}/render/preview?frame={frame}",
+                       json={"panel": "right", "panel_layout": "extend", "scale": 0.5, "show_boxes": False})
+    assert cv2.imdecode(np.frombuffer(wide.content, np.uint8), 1).shape[1] > 320
+    assert client.get(f"/api/projects/{pid}").json()["config"]["render"]["panel"] == "right"  # not saved
+
+    res = client.post(f"/api/projects/{pid}/vehicles/{tid}/split").json()
+    assert not any(v["merged"] for v in res["vehicles"])
+    assert client.get(f"/api/projects/{pid}").json()["config"]["vehicles"]["merges"] == []
+
+    # a new analysis has new track ids: names and merges are dropped with the old ones
+    client.post(f"/api/projects/{pid}/vehicles/merge", json={"ids": [tid, 900]})
+    assert _wait(client, client.post(f"/api/projects/{pid}/analyze").json()["id"])["status"] == "done"
+    for _ in range(20):
+        if client.get(f"/api/projects/{pid}").json()["config"]["vehicles"] == {"names": {}, "merges": []}:
+            break
+        time.sleep(0.2)
+    assert client.get(f"/api/projects/{pid}").json()["config"]["vehicles"] == {"names": {}, "merges": []}
+    assert client.get(f"/api/projects/{pid}/results").json()["vehicles"][0]["name"] == ""
+
+
 def test_ui_cache_headers(tmp_path):
     """index.html is always revalidated (it names the current app code); hashed assets are
     cached for good. Without this a browser kept showing an old UI after an update."""

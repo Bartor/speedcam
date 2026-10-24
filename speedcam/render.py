@@ -21,8 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import calibration, scan, violations
 from .config import ProjectConfig, RenderSettings
-from .flow import reference_positions
-from .pipeline import Reporter, find_violations, margin_of_error, resolve_capture_fps
+from .pipeline import Reporter, find_violations, load_tracks, margin_of_error, resolve_capture_fps
 from .speed import TrackRender, compute_speeds
 from .stabilization import transform_points
 from .timing import probe
@@ -304,7 +303,8 @@ class Panel:
             d.rounded_rectangle([x, y + int(8 * k), x + int(5 * k), y + row_h - int(14 * k)], radius=int(2 * k),
                                 fill=(*col, 255))
             tx = x + int(16 * k)
-            d.text((tx, y + int(10 * k)), v["class"].capitalize(), font=f("bold", int(20 * k)), fill=WHITE, anchor="lt")
+            who = v.get("name") if rs.show_names and v.get("name") else v["class"].capitalize()
+            d.text((tx, y + int(10 * k)), who, font=f("bold", int(20 * k)), fill=WHITE, anchor="lt")
             mm, ss = divmod(int(v["t_exit_s"]), 60)
             where = f"{v['path']} " if v.get("path") and self.many_paths else ""
             d.text((tx, y + row_h - int(14 * k)), f"{where}{v['direction'].replace('->', ' → ')}  ·  {mm}:{ss:02d}",
@@ -405,10 +405,16 @@ def filled_boxes(tracks: pd.DataFrame, max_gap_frames: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["frame", "track_id", *CORNER_COLS])
     return pd.concat(parts, ignore_index=True)
 
+def boxes_by_frame(cfg: ProjectConfig, tracks: pd.DataFrame, fps: float) -> dict:
+    boxes = filled_boxes(tracks, int(round(cfg.tracking.lost_buffer_s * fps)))
+    return {int(f): (g["track_id"].to_numpy(), g[CORNER_COLS].to_numpy().reshape(-1, 4, 2))
+            for f, g in boxes.groupby("frame")}
+
+
 class Overlay:
     def __init__(self, cfg: ProjectConfig, fps: float, cal, renders: dict[int, TrackRender],
                  tracks: pd.DataFrame, transforms: dict, size: tuple[int, int], src_size: tuple[int, int],
-                 typo: Optional[Typography] = None, viol: Optional[dict] = None):
+                 typo: Optional[Typography] = None, viol: Optional[dict] = None, by_frame: Optional[dict] = None):
         self.cfg, self.fps, self.cal, self.renders = cfg, fps, cal, renders
         self.events = violation_events(viol)
         # nothing measured (tracking only): show every tracked vehicle
@@ -426,9 +432,7 @@ class Overlay:
         self.typo = typo or Typography(self.rs.font)
         self.pills = Pills(self.typo, self.k)
         self.T_frames, self.T = transforms["frames"], transforms["T"]
-        boxes = filled_boxes(tracks, int(round(cfg.tracking.lost_buffer_s * fps)))
-        self.by_frame = {int(f): (g["track_id"].to_numpy(), g[CORNER_COLS].to_numpy().reshape(-1, 4, 2))
-                         for f, g in boxes.groupby("frame")}
+        self.by_frame = by_frame if by_frame is not None else boxes_by_frame(cfg, tracks, fps)
         self.trail_frames = int(round(self.rs.trail_s * fps))
         self.trail_px = {tid: calibration.apply_h(self.H_inv, r.world) for tid, r in renders.items()}
         # where the traffic is (reference px), to put line tags on the kerb side, off the lanes
@@ -546,10 +550,10 @@ class Overlay:
 
         # measurement lines, with the measured section length between them
         gap = self.cal.line_gap_m
-        if self.cal.path_geoms:
+        if self.cal.path_geoms and self.rs.show_lines:
             self._draw_paths(frame, to_disp)
         for name, line, color in ((("A", cal.line_a, LINE_A), ("B", cal.line_b, LINE_B))
-                                  if not self.cal.path_geoms else ()):
+                                  if not self.cal.path_geoms and self.rs.show_lines else ()):
             if not line:
                 continue
             p = transform_points(to_disp, np.array(line, float))
@@ -564,7 +568,8 @@ class Overlay:
             c = p[far] + out * (0.5 * abs(out[0]) * pw_ + 0.5 * abs(out[1]) * ph_ + 8 * self.k)
             self._pill(frame, c[0], c[1] + ph_ / 2, name, small, color, INK, 0.95, center=True)
 
-        self._draw_rules(frame, to_disp, t)
+        if self.rs.show_rules:
+            self._draw_rules(frame, to_disp, t)
         ids, corners = self.by_frame.get(n, (np.zeros(0, int), np.zeros((0, 4, 2))))
         for tid, c in zip(ids, corners):
             r = self.renders.get(int(tid))
@@ -579,21 +584,25 @@ class Overlay:
                     vmax = res.get("speed_max_kmh", res["speed_kmh"])
                     color = speed_rgb(vmax, limit) if res["valid"] else INVALID
                     if t - r.t_second <= self.rs.label_hold_s:  # then just the coloured box: less clutter
-                        label = (f"{vmax:.1f}" + ("" if res["valid"] else "?"), "km/h max", color, INK)
+                        who = f" · {res['name']}" if self.rs.show_names and res.get("name") else ""
+                        label = (f"{vmax:.1f}" + ("" if res["valid"] else "?"), f"km/h max{who}", color, INK)
                 elif t > r.t_first:
                     kk = n - r.frames[0]
                     v = r.inst_kmh[kk] if 0 <= kk < len(r.inst_kmh) else np.nan
                     color = WHITE
                     if np.isfinite(v):
                         label = (f"{v:.0f}", "km/h", INK, WHITE)
-            cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(color), self.lw, cv2.LINE_AA)
-            if r is not None and res and r.t_first is not None and t > r.t_first:
+            if not self.rs.show_labels:
+                label = None
+            if self.rs.show_boxes:
+                cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(color), self.lw, cv2.LINE_AA)
+            if self.rs.show_trails and r is not None and res and r.t_first is not None and t > r.t_first:
                 kk = n - r.frames[0]
                 lo = max(0, kk - self.trail_frames)
                 if kk > lo:
                     trail = transform_points(to_disp, self.trail_px[int(tid)][lo:kk + 1]).astype(np.int32)
                     cv2.polylines(frame, [trail], False, bgr(color), self.lw, cv2.LINE_AA)
-            if ev:  # a violation: box in the violation colour from then on
+            if ev and self.rs.show_boxes:  # a violation: box in the violation colour from then on
                 cv2.polylines(frame, [pts.astype(np.int32)], True, bgr(VIOLATION), self.lw + 1, cv2.LINE_AA)
             items = ([label] if label else []) + [(e["big"], e["small"], VIOLATION, WHITE) for e in ev
                                                   if event_showing(e, t, self.rs.label_hold_s)]
@@ -605,55 +614,103 @@ class Overlay:
         return frame
 
 
+def prepare(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter] = None) -> dict:
+    """Everything a render draws from apart from how it looks: tracks, speeds, margins of error,
+    violations, stabilization transforms. Previews keep it between frames."""
+    reporter = reporter or Reporter()
+    out = Path(out_dir)
+    info = probe(cfg.source)
+    fps = resolve_capture_fps(cfg, info, reporter)
+    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
+    tracks = load_tracks(cfg, out, cal)
+    results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                      paths=cal.path_geoms, H=cal.H)
+    margin_of_error(cfg, results, renders, cal, fps)
+    for r in results:
+        r["name"] = cfg.vehicles.names.get(r["track_id"], "")
+    viol = find_violations(cfg, cal, tracks, renders, fps, out, reporter)
+    tf = np.load(out / "transforms.npz")
+    return {"info": info, "fps": fps, "cal": cal, "tracks": tracks, "results": results, "renders": renders,
+            "viol": viol, "transforms": {"frames": tf["frames"], "T": tf["T"]},
+            "by_frame": boxes_by_frame(cfg, tracks, fps)}
+
+
+class Composer:
+    """One output frame from one source frame: the overlay drawn on it, and the side panel."""
+
+    def __init__(self, cfg: ProjectConfig, prep: dict):
+        rs, info = cfg.render, prep["info"]
+        self.fps = prep["fps"]
+        W = max(2, int(round(info.width * rs.scale / 2)) * 2)
+        H = max(2, int(round(info.height * rs.scale / 2)) * 2)
+        typo = Typography(rs.font)
+        self.overlay = Overlay(cfg, self.fps, prep["cal"], prep["renders"], prep["tracks"], prep["transforms"],
+                               (W, H), (info.width, info.height), typo, prep["viol"], by_frame=prep["by_frame"])
+        self.read_size = (W, H)
+        if cfg.rotation in (90, 270):  # the output (and the panel beside it) is the rotated frame
+            W, H = H, W
+        self.W, self.H = W, H
+        self.panel, self.layout = None, rs.panel_layout
+        self.out_w, self.video_x, self.panel_x = W, 0, 0
+        if rs.panel != "none":
+            pw = max(2, int(round(W * rs.panel_width / 2)) * 2)
+            self.panel = Panel(typo, rs, prep["results"], (pw, H), opaque=rs.panel_layout == "extend")
+            if rs.panel_layout == "extend":
+                self.out_w = W + pw
+                self.video_x = pw if rs.panel == "left" else 0
+            self.panel_x = (W if rs.panel_layout == "extend" else W - pw) if rs.panel == "right" else 0
+        self.canvas = np.zeros((H, self.out_w, 3), np.uint8)
+
+    def compose(self, frame: np.ndarray, n: int) -> np.ndarray:
+        drawn = self.overlay.draw(frame.copy(), n)
+        if self.panel is None:
+            return drawn
+        c = self.canvas
+        c[:, self.video_x:self.video_x + self.W] = drawn
+        if self.layout == "overlay":
+            _frost(c, self.panel_x, self.panel.W)
+        _blend(c, self.panel_x, 0, self.panel.layer_at(n / self.fps))
+        return c
+
+
+def render_ranges(cfg: ProjectConfig, nb_frames: int) -> list[tuple[int, int]]:
+    """Frame ranges to render, in order: the ones picked on the Export timeline, else the analysed
+    parts (with only_parts), else the whole video."""
+    rs = cfg.render
+    if rs.ranges:
+        out: list[tuple[int, int]] = []
+        for a, b in sorted((max(0, int(a)), min(nb_frames, int(b))) for a, b in rs.ranges):
+            if b <= a:
+                continue
+            if out and a <= out[-1][1]:
+                out[-1] = (out[-1][0], max(out[-1][1], b))
+            else:
+                out.append((a, b))
+        if out:
+            return out
+    if cfg.parts and rs.only_parts:
+        return scan.analysis_ranges(cfg, nb_frames)
+    return [(0, nb_frames)]
+
+
 def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = None,
            reporter: Optional[Reporter] = None) -> dict:
     reporter = reporter or Reporter()
     out = Path(out_dir)
     dst = Path(dst) if dst else out / "render.mp4"
     rs = cfg.render
-    info = probe(cfg.source)
-    fps = resolve_capture_fps(cfg, info, reporter)
-    cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
-    tracks = pd.read_parquet(out / "tracks.parquet")
-    world = calibration.apply_h(cal.H, reference_positions(tracks))
-    tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
-    results, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
-                                           paths=cal.path_geoms, H=cal.H)
-    if rs.panel != "none" and rs.show_margin:
-        margin_of_error(cfg, results, renders, cal, fps)
-    viol = find_violations(cfg, cal, tracks, renders, fps, out, reporter)
-    tf = np.load(out / "transforms.npz")
-    transforms = {"frames": tf["frames"], "T": tf["T"]}
-
-    W = max(2, int(round(info.width * rs.scale / 2)) * 2)
-    H = max(2, int(round(info.height * rs.scale / 2)) * 2)
-    typo = Typography(rs.font)
-    overlay = Overlay(cfg, fps, cal, renders, tracks, transforms, (W, H), (info.width, info.height), typo, viol)
-    read_w, read_h = W, H
-    if cfg.rotation in (90, 270):  # the output (and the panel beside it) is the rotated frame
-        W, H = H, W
-
-    panel = None
-    out_w = W
-    if rs.panel != "none":
-        pw = max(2, int(round(W * rs.panel_width / 2)) * 2)
-        extend = rs.panel_layout == "extend"
-        panel = Panel(typo, rs, results, (pw, H), opaque=extend)
-        if extend:
-            out_w = W + pw
-    video_x = pw if panel and rs.panel_layout == "extend" and rs.panel == "left" else 0
-    panel_x = 0
-    if panel:
-        panel_x = (W if rs.panel_layout == "extend" else W - pw) if rs.panel == "right" else 0
+    prep = prepare(cfg, out, reporter)
+    info, fps = prep["info"], prep["fps"]
+    comp = Composer(cfg, prep)
+    read_w, read_h = comp.read_size
 
     out_fps = rs.output_fps or fps
     ratio = rs.playback_speed * fps / out_fps  # source frames per output frame
-    # the whole video, or only the analysed parts (each read from a seek), back to back
-    ranges = scan.analysis_ranges(cfg, info.nb_frames) if cfg.parts and rs.only_parts else [(0, info.nb_frames)]
+    # the whole video, or some parts of it (each read from a seek), back to back
+    ranges = render_ranges(cfg, info.nb_frames)
     n_out = sum(int(math.floor((b - a - 1) / ratio)) + 1 for a, b in ranges if b > a)
 
-    writer = FFmpegWriter(dst, out_w, H, out_fps, rs.encoder, rs.quality)
-    canvas = np.zeros((H, out_w, 3), np.uint8)
+    writer = FFmpegWriter(dst, comp.out_w, comp.H, out_fps, rs.encoder, rs.quality)
     j = 0
     t0 = time.monotonic()
     try:
@@ -667,15 +724,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
                     if n >= b:
                         break
                     while a + int(round(jl * ratio)) == n:
-                        drawn = overlay.draw(frame.copy(), n)
-                        if panel is None:
-                            writer.write(drawn)
-                        else:
-                            canvas[:, video_x:video_x + W] = drawn
-                            if rs.panel_layout == "overlay":
-                                _frost(canvas, panel_x, panel.W)
-                            _blend(canvas, panel_x, 0, panel.layer_at(n / fps))
-                            writer.write(canvas)
+                        writer.write(comp.compose(frame, n))
                         jl += 1
                         j += 1
                     if j % 10 == 0:
@@ -689,13 +738,29 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
         raise
     writer.close()
     meta = {"file": dst.name, "output_fps": out_fps, "playback_speed": rs.playback_speed, "scale": rs.scale,
-            "mode": rs.mode, "frames": j, "width": out_w, "height": H, "codec": writer.codec,
-            "capture_fps": fps, "panel": rs.panel, "panel_layout": rs.panel_layout,
-            "video_x": video_x, "video_width": W, "rotation": cfg.rotation,
+            "mode": rs.mode, "frames": j, "width": comp.out_w, "height": comp.H, "codec": writer.codec,
+            "quality": rs.quality, "capture_fps": fps, "panel": rs.panel, "panel_layout": rs.panel_layout,
+            "video_x": comp.video_x, "video_width": comp.W, "rotation": cfg.rotation,
             "parts": [list(r) for r in ranges] if len(ranges) > 1 or ranges[0] != (0, info.nb_frames) else None}
     (out / "render.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     reporter.progress("done", 1, 1)
     return meta
+
+
+def preview(cfg: ProjectConfig, prep: dict, n: int) -> np.ndarray:
+    """Output frame `n` exactly as the render would draw it with these settings (LUT included)."""
+    info = prep["info"]
+    n = int(np.clip(n, 0, info.nb_frames - 1))
+    comp = Composer(cfg, prep)
+    w, h = comp.read_size
+    reader = FFmpegReader(cfg.source, w, h, cfg.render.lut, start_s=max(0.0, (n - 0.25) / info.container_fps))
+    try:
+        frame = next(iter(reader), None)
+    finally:
+        reader.close()
+    if frame is None:
+        raise IndexError(f"frame {n} not found")
+    return comp.compose(frame, n).copy()
 
 
 def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
@@ -707,9 +772,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
     info = probe(cfg.source)
     fps = resolve_capture_fps(cfg, info, Reporter())
     cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
-    tracks = pd.read_parquet(out / "tracks.parquet")
-    world = calibration.apply_h(cal.H, reference_positions(tracks))
-    tracks["x_m"], tracks["y_m"] = world[:, 0], world[:, 1]
+    tracks = load_tracks(cfg, out, cal)
     _, renders = compute_speeds(tracks, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms, H=cal.H)
     viol = find_violations(cfg, cal, tracks, renders, fps, out, sample=False) or {}
@@ -730,6 +793,7 @@ def overlay_data(cfg: ProjectConfig, out_dir: str | Path) -> dict:
             # momentary speed per frame (shown between the lines)
             "prov": [None if not np.isfinite(v) else round(float(v), 1) for v in r.inst_kmh] if res else None,
             "cls": r.cls,
+            "name": cfg.vehicles.names.get(int(tid), ""),
             "t_first": r.t_first, "t_second": r.t_second,
             "speed": res["speed_kmh"] if res else None,
             "speed_max": res.get("speed_max_kmh") if res else None,
