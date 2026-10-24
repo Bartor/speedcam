@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Timeline from "../components/Timeline";
 import Help from "../components/Help";
 import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
@@ -188,8 +189,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
               onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
           ) : <div className="scrub-video placeholder">proxy building…</div>}
           <div className="grow scrub-body">
-            <input type="range" min={0} max={info.nb_frames - 1} value={scrub} className="wide" aria-label="Frame"
-              onChange={(e) => seek(+e.target.value)} />
+            <Timeline project={project} frame={scrub} onSeek={seek} onProjectChange={onChanged} />
             <div className="row small">
               <button onClick={() => seek(scrub - 1)} title="Previous frame">◀ 1</button>
               <button onClick={() => seek(scrub + 1)} title="Next frame">1 ▶</button>

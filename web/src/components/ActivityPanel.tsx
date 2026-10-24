@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Help from "./Help";
 import { api, Project, ScanResult, useJob } from "../api";
 import ProgressBar from "./ProgressBar";
@@ -38,7 +38,8 @@ export default function ActivityPanel({ project, onChanged, disabled }: { projec
       const d = await api.getScan(project.id);
       setData(d);
       // parts already chosen follow the new padding/merging
-      onChanged(parts ? await api.patch(project.id, { parts: d.suggested }) : p);
+      const followed = parts && JSON.stringify(parts) === JSON.stringify(data?.suggested);
+      onChanged(followed ? await api.patch(project.id, { parts: d.suggested }) : p);
     } catch (e) { setErr(String(e)); }
   };
 
@@ -61,20 +62,20 @@ export default function ActivityPanel({ project, onChanged, disabled }: { projec
       {err && <div className="banner error">{err}</div>}
       {sc && (
         <>
-          <Timeline sc={sc} suggested={data!.suggested} parts={parts} />
           <div className="row small muted">
-            <span>0:00</span><span className="grow" />
             <span>{(sc.moving ?? sc.counts).filter((c) => c > 0).length} of {sc.counts.length} samples with moving vehicles
-              {sc.moving ? <> (bright; dim: all vehicles, parked too)</> : null} ·
-              read {sc.mode === "keyframes" ? "keyframes" : "1 frame/s"} in {sc.elapsed_s.toFixed(0)} s</span>
-            <span className="grow" /><span>{clock(total / fps)}</span>
+              (shown on the timeline above) · read {sc.mode === "keyframes" ? "keyframes" : "1 frame/s"} in {sc.elapsed_s.toFixed(0)} s</span>
           </div>
           <label className="item-row">
-            <input type="checkbox" checked={!!parts} disabled={disabled || !data!.suggested.length}
+            <input type="checkbox" checked={!!parts && JSON.stringify(parts) === JSON.stringify(data!.suggested)}
+              disabled={disabled || !data!.suggested.length}
               onChange={(e) => setParts(e.target.checked ? data!.suggested : null)} />
             <span>Analyse only the parts with vehicles: <b>{data!.suggested.length}</b> part{data!.suggested.length === 1 ? "" : "s"},
               {" "}{clock(covered(data!.suggested) / fps)} of {clock(total / fps)} ({Math.round((100 * covered(data!.suggested)) / total)} %)</span>
           </label>
+          {parts && JSON.stringify(parts) !== JSON.stringify(data!.suggested) && (
+            <p className="muted small">Your own parts are set on the timeline; ticking this replaces them with the activity parts.</p>
+          )}
           <div className="item-row small">
             <span className="muted" title="Added before and after each part with vehicles, so vehicles entering and leaving are tracked whole">Padding</span>
             <input key={`p${s.pad_s}`} type="number" step="0.5" min={0} className="narrow" defaultValue={s.pad_s ?? 2}
@@ -93,34 +94,4 @@ export default function ActivityPanel({ project, onChanged, disabled }: { projec
       )}
     </div>
   );
-}
-
-function Timeline({ sc, suggested, parts }: { sc: NonNullable<ScanResult["scan"]>; suggested: [number, number][]; parts: [number, number][] | null }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const c = ref.current;
-    if (!c) return;
-    const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
-    c.width = W * dpr; c.height = H * dpr;
-    const g = c.getContext("2d")!;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
-    const x = (f: number) => (f / sc.nb_frames) * W;
-    g.fillStyle = "rgba(255,255,255,.04)"; g.fillRect(0, 0, W, H);
-    (parts ?? suggested).forEach(([a, b]) => {
-      g.fillStyle = parts ? "rgba(57,135,229,.30)" : "rgba(57,135,229,.14)";
-      g.fillRect(x(a), 0, Math.max(1, x(b) - x(a)), H);
-    });
-    const peak = Math.max(1, ...sc.counts);
-    const bw = Math.max(1, W / Math.max(1, sc.frames.length));
-    const bar = (f: number, n: number, color: string) => {
-      if (!n) return;
-      const h = 3 + (H - 6) * Math.min(1, n / peak);
-      g.fillStyle = color;
-      g.fillRect(x(f) - bw / 2, H - h, Math.max(1, bw * 0.8), h);
-    };
-    sc.frames.forEach((f, k) => bar(f, sc.counts[k], "rgba(233,238,245,.22)"));  // all vehicles, parked too
-    sc.frames.forEach((f, k) => bar(f, (sc.moving ?? sc.counts)[k], "#e9eef5"));  // moving ones
-  });
-  return <canvas ref={ref} className="activity-timeline" title="Vehicles per sample over the whole video (bright: moving, dim: all, parked too); blue: the parts to analyse" />;
 }

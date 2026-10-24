@@ -195,6 +195,14 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    rotation is set from the flag, so they show upright. The proxy and the render
    ignore the flag too, so picture and overlay always line up. Projects made before
    this rebuild their proxy once when opened, with nothing to re-analyse.
+   **Timeline** (Calibrate, Process and Results): a scrubbable view of the whole clip
+   with a time ruler, frame thumbnails (hover for a bigger preview), the activity scan
+   and the parts to analyse; on Results also each measured vehicle (click to jump to
+   it). Drag on the bottom lane to cut a stretch out (starting over blue) or add one back
+   (starting elsewhere), drag a part's edge to adjust it, or press **I** and **O** at the
+   playhead for in and out points. *Use activity* takes the scan's parts, *Analyse all*
+   the whole clip. Wheel zooms around the cursor, Shift+wheel pans, arrow keys step
+   frames.
 2. **Calibrate:** choose a reference frame. For any view that isn't straight down,
    use **Polygon**: click 4+ flat ground points, then type measured sides and
    diagonals. A polygon with N corners needs 2N−3 distances to fix its shape (a

@@ -40,6 +40,13 @@ def test_full_api_flow(tmp_path):
     r = client.get(f"/api/projects/{pid}/proxy.mp4", headers={"Range": "bytes=0-99"})
     assert r.status_code == 206 and len(r.content) == 100
 
+    strip = client.get(f"/api/projects/{pid}/filmstrip.jpg?count=12&height=40")  # timeline thumbnails
+    assert strip.status_code == 200 and strip.headers["content-type"] == "image/jpeg"
+    import cv2
+    import numpy as np
+    s = cv2.imdecode(np.frombuffer(strip.content, np.uint8), 1)
+    assert s.shape[0] == 40 and s.shape[1] == 12 * (s.shape[1] // 12)
+
     img = client.get(f"/api/projects/{pid}/frame/10")
     assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
 

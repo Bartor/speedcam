@@ -224,6 +224,45 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         return FileResponse(f, media_type="image/png" if fmt == "png" else "image/jpeg",
                             headers={"Cache-Control": "max-age=3600"})
 
+    @app.get("/api/projects/{pid}/filmstrip.jpg")
+    def filmstrip(pid: str, count: int = 60, height: int = 64):
+        """`count` thumbnails spread evenly over the clip, side by side in one JPEG (thumbnail k
+        is frame round(k * (nb_frames - 1) / (count - 1))), in the view rotation. Read from the
+        proxy (fast to decode); cached until the proxy or the rotation changes."""
+        import cv2
+        import numpy as np
+
+        from ..video import FrameGrabber, rotate_frame
+
+        d = _dir(pid)
+        count, height = max(2, min(count, 240)), max(24, min(height, 240))
+        data = store.load(pid)
+        rot = ProjectConfig.model_validate(data["config"]).rotation
+        src = d / "proxy.mp4"
+        if not src.exists():
+            raise HTTPException(404, "proxy not built yet")
+        key = f"{count}_{height}_{rot}_{int(src.stat().st_mtime)}"
+        out = store.cache_dir(pid) / f"filmstrip_{key}.jpg"
+        if not out.exists():
+            for old in store.cache_dir(pid).glob("filmstrip_*.jpg"):
+                old.unlink(missing_ok=True)
+            n = int(data["info"]["nb_frames"])
+            g = FrameGrabber(src)
+            try:
+                thumbs = []
+                for f in np.linspace(0, n - 1, count).round().astype(int):
+                    try:
+                        img = rotate_frame(g.get(int(f)), rot)
+                    except (IndexError, EOFError):
+                        img = thumbs[-1] if thumbs else np.zeros((height, height, 3), np.uint8)
+                    w = max(1, int(round(img.shape[1] * height / img.shape[0])))
+                    thumbs.append(cv2.resize(img, (w, height), interpolation=cv2.INTER_AREA))
+            finally:
+                g.close()
+            w = min(t.shape[1] for t in thumbs)
+            cv2.imwrite(str(out), np.hstack([t[:, :w] for t in thumbs]), [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return FileResponse(out, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
     @app.get("/api/projects/{pid}/lights/{n}")
     def read_lights(pid: str, n: int):
         """What each red-light setup's lights show on frame n: to check the circles and thresholds."""

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Timeline from "../components/Timeline";
 import Help, { Advanced } from "../components/Help";
 import "../components/speed-profile.css";
 import { api, fmt, margin, marginBreakdown, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
@@ -136,6 +137,12 @@ export default function ResultsScreen({ project, onChanged }: Props) {
           {!useRender && showOverlay && overlay && <TrackOverlay data={overlay} video={video} frame={frame} rotation={viewRot} />}
         </div>
         {viewRot !== 0 && <VideoControls video={video} />}
+        {!useRender && (
+          <Timeline project={project} frame={frame} onProjectChange={onChanged}
+            onSeek={(f) => { if (video) { video.pause(); video.currentTime = (f + 0.5) / project.info.container_fps; } }}
+            vehicles={res.vehicles.map((v) => ({ id: v.track_id, f0: Math.round(v.t_entry_s * fps), f1: Math.round(v.t_exit_s * fps), valid: v.valid }))}
+            selectedVehicle={selected} onPickVehicle={setSelected} />
+        )}
         <div className="video-bar small">
           <span className="time-readout">t = <b>{tNow.toFixed(3)}</b> s real</span>
           <span className="grow" />

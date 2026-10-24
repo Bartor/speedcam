@@ -1,6 +1,8 @@
 import { useState } from "react";
+import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
+import Timeline from "../components/Timeline";
 import Help, { Advanced } from "../components/Help";
-import { api, fmt, Project, useJob } from "../api";
+import { api, fmt, Project, useJob, useVideoFrame } from "../api";
 import ProgressBar from "../components/ProgressBar";
 import ActivityPanel from "../components/ActivityPanel";
 import "../components/library.css";
@@ -90,6 +92,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
             : <button className="danger" onClick={() => jobId && api.cancel(jobId)}>Cancel</button>}
           {project.status.results_json && !running && <button onClick={onDone}>View results →</button>}
         </div>
+        <ClipPreview project={project} onChanged={onChanged} />
         <ActivityPanel project={project} onChanged={onChanged} disabled={running} />
         <div className="camera-mode">
           <span className="muted small">Camera<Help topic="process.camera" /></span>
@@ -200,6 +203,29 @@ function DriftVerdict({ drift, stabilized, onSkip }: {
         : drift.max_px < 2 ? "Small drift: skipping stabilization would add up to that much position error. Keep it on for the most accurate speeds."
           : "The camera moves: keep stabilization on."}
       {" "}<span className="muted">(Measured over the preview only; check a longer stretch if the drone was gusting.)</span>
+    </div>
+  );
+}
+
+/** The clip, scrubbable: a small player and the timeline (parts to analyse, activity). */
+function ClipPreview({ project, onChanged }: { project: Project; onChanged: (p: Project) => void }) {
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const { frame } = useVideoFrame(video, project.info.container_fps);
+  const rot = project.config.rotation ?? 0;
+  const seek = (f: number) => {
+    if (!video) return;
+    video.pause();
+    video.currentTime = (Math.max(0, Math.min(project.info.nb_frames - 1, f)) + 0.5) / project.info.container_fps;
+  };
+  if (!project.status.proxy_mp4) return <p className="muted small">The clip preview appears when the proxy is built.</p>;
+  return (
+    <div className="clip-preview">
+      <div className={`clip-video${rot ? " rotated" : ""}`}>
+        <RotatedVideo rotation={rot} videoRef={setVideo} src={api.proxyUrl(project.id)} muted playsInline preload="auto"
+          onClick={(e) => { const v = e.currentTarget; v.paused ? v.play() : v.pause(); }} />
+      </div>
+      {video && <VideoControls video={video} />}
+      <Timeline project={project} frame={frame} onSeek={seek} onProjectChange={onChanged} />
     </div>
   );
 }
