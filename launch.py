@@ -153,9 +153,10 @@ def ensure_python_env() -> None:
 
 def ui_hash() -> str:
     """Version of the web UI sources: a hash of web/src and the build files, with line endings
-    normalised so a Windows checkout (CRLF) and CI (LF) agree."""
-    files = sorted([f for f in (WEB / "src").rglob("*") if f.is_file()] +
-                   [WEB / n for n in UI_FILES if (WEB / n).is_file()])
+    normalised and files in a case-sensitive order, so a Windows checkout and CI (Linux) agree."""
+    files = [f for f in (WEB / "src").rglob("*") if f.is_file()] + [WEB / n for n in UI_FILES if (WEB / n).is_file()]
+    # by the plain path text: Windows sorts Path objects ignoring case, Linux (CI) doesn't
+    files.sort(key=lambda f: f.relative_to(WEB).as_posix())
     h = hashlib.sha256()
     for f in files:
         h.update(f.relative_to(WEB).as_posix().encode() + b"\0")

@@ -34,6 +34,18 @@ def test_ui_hash_ignores_line_endings_and_tracks_changes(ui):
     assert launch.ui_hash() != h
 
 
+def test_ui_hash_is_the_same_on_every_platform(ui):
+    """Computed by hand the way CI (Linux) does it: files in case-sensitive path order, LF."""
+    import hashlib
+
+    (launch.WEB / "src" / "api.ts").write_bytes(b"x\r\n")  # sorts after App.tsx on Linux, before on Windows
+    files = {"index.html": b"<div id=root></div>\n", "src/App.tsx": b"export const a = 1;\n", "src/api.ts": b"x\n"}
+    h = hashlib.sha256()
+    for name in sorted(files):  # str order: "index.html" < "src/App.tsx" < "src/api.ts"
+        h.update(name.encode() + b"\0" + files[name] + b"\0")
+    assert launch.ui_hash() == h.hexdigest()[:16]
+
+
 def test_downloads_the_matching_prebuilt_ui(ui, monkeypatch):
     want = launch.ui_hash()
     served = ui / "served"
