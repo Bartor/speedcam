@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import calibration, uncertainty, violations
+from . import calibration, scan, uncertainty, violations
 from .config import ProjectConfig
 from .detection import make_detector
 from .flow import FlowTracker, reference_positions
@@ -24,7 +24,7 @@ from .stabilization import Stabilizer, transform_points
 from .stats import summarize
 from .timing import check_timing, probe
 from .tracking import Tracker
-from .video import FrameGrabber, iter_frames, rotate_frame
+from .video import FrameGrabber, iter_frames, iter_ranges, rotate_frame
 
 log = logging.getLogger(__name__)
 
@@ -201,7 +201,12 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 
     start = max(0, cfg.start_frame)
     end = min(cfg.end_frame or info.nb_frames, info.nb_frames)
-    total = max(1, end - start)
+    ranges = scan.analysis_ranges(cfg, info.nb_frames)  # the chosen parts, if any
+    if not ranges:
+        raise ValueError("Nothing to analyse: the chosen parts are outside the start/end frames")
+    total = max(1, sum(b - a for a, b in ranges))
+    if cfg.parts:
+        reporter.log(f"Analysing {len(ranges)} part(s) of the video: {total} of {end - start} frames")
 
     pts_anomalies = []
 
@@ -219,7 +224,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     trails: dict[int, list] = {}
     trail_len = int(round(fps))  # 1 s of history
     seen_tracks: set[int] = set()
-    state = {"done": 0, "n_dets": 0, "last_preview": 0.0}
+    state = {"done": 0, "n_dets": 0, "last_preview": 0.0, "last_i": -1, "id_offset": 0}
     # traffic-light colours, read on every frame while it's decoded anyway
     sampler = violations.LightSampler(cfg.calibration, cfg.violations) if violations.needs_samples(cfg.calibration) else None
     light_frames: list[int] = []
@@ -227,6 +232,17 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
 
     def per_frame(i: int, frame: np.ndarray, dets) -> None:
         """Stabilize, track and record one frame. Called strictly in frame order (tracking needs it)."""
+        nonlocal tracker, flow
+        if state["last_i"] >= 0 and i != state["last_i"] + 1:
+            # the next part of the video (cfg.parts): no track carries over the jump, new ids
+            state["id_offset"] = max(seen_tracks) + 1 if seen_tracks else 0
+            tracker = Tracker(cfg.tracking, fps)
+            if flow:
+                flow = FlowTracker(cfg.flow, fps)
+            trails.clear()
+            if stab:
+                stab.prev_feat = None  # match the reference again, not a frame from before the jump
+        state["last_i"] = i
         state["n_dets"] += len(dets)
         if stab:
             reg = stab.register(frame, dets.xyxy)
@@ -257,6 +273,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
         xyxy_ref = (np.concatenate([corners_ref.min(1), corners_ref.max(1)], 1)
                     if len(dets) else np.zeros((0, 4)))
         ids = tracker.update(xyxy_ref, dets.conf, dets.cls)
+        ids = np.where(ids >= 0, ids + state["id_offset"], ids)
         live = set()
         for tid, c in zip(ids, dets.centers):
             if tid >= 0:
@@ -312,7 +329,8 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     #   decoder thread -> batch of frames -> detection (GPU; each frame detected on its own)
     #   -> per_frame() on a single worker thread, strictly in frame order.
     batch = max(1, cfg.detection.batch)
-    frames = _Prefetch(iter_frames(cfg.source, start, end, pts_check), maxsize=2 * batch)
+    source = iter_ranges(cfg.source, ranges) if cfg.parts else iter_frames(cfg.source, start, end, pts_check)
+    frames = _Prefetch(source, maxsize=2 * batch)
     pending: deque[Future] = deque()
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="track") as post:
         try:

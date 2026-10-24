@@ -267,6 +267,26 @@ class ViolationSettings(BaseModel):
     min_duration_s: float = 0.5
 
 
+class ScanSettings(BaseModel):
+    """Activity scan (see scan.py): a quick pass that finds the parts of a video with vehicles."""
+
+    # "" = the analysis's own detector (Auto picks the model for the camera angle as it does for
+    # the analysis: a COCO model finds nothing straight down); or name one
+    model: str = ""
+    imgsz: int = 1280  # frames are read at this size (long side), the analysis's detection size
+    conf: float = 0.3
+    half: bool = True
+    sample_fps: float = 1.0  # samples per second when keyframes are too far apart
+    keyframe_max_gap_s: float = 2.0  # keyframe-only decoding when keyframes are at most this far apart
+    min_count: int = 1  # vehicles a sample needs to count as activity
+    # activity = moving vehicles: a box overlapping one in the sample before or after by this
+    # IoU is standing (parked cars on a CCTV street would otherwise make every moment "busy")
+    moving_only: bool = True
+    still_iou: float = 0.6
+    pad_s: float = 2.0  # added before and after each part with vehicles
+    merge_s: float = 5.0  # parts closer than this are joined
+
+
 class RenderSettings(BaseModel):
     mode: Literal["stabilized", "original"] = "stabilized"
     output_fps: Optional[float] = None  # None = native (capture_fps)
@@ -280,6 +300,7 @@ class RenderSettings(BaseModel):
     # where speed (and violation) labels go around a vehicle's box, as seen in the output. Pick
     # the side away from neighbouring lanes and lines: e.g. left/right when traffic runs across
     label_position: Literal["above", "below", "left", "right"] = "above"
+    only_parts: bool = True  # when the analysis covers only some parts, render only those
     speed_limit_kmh: float = 50.0
     # presentation (social media): side panel listing every vehicle's max speed as it finishes
     panel: Literal["none", "right", "left"] = "right"
@@ -336,6 +357,10 @@ class ProjectConfig(BaseModel):
     stats: StatsSettings = Field(default_factory=StatsSettings)
     uncertainty: UncertaintySettings = Field(default_factory=UncertaintySettings)
     violations: ViolationSettings = Field(default_factory=ViolationSettings)
+    scan: ScanSettings = Field(default_factory=ScanSettings)
+    # parts of the video to analyse, frame ranges [start, end) (e.g. from the activity scan);
+    # None = all of it (within start_frame/end_frame)
+    parts: Optional[list[tuple[int, int]]] = None
 
 
 def load_config(path: str | Path) -> ProjectConfig:

@@ -66,6 +66,12 @@ def run_job(kind: str, project_dir: str, q, cancel_event, params: Optional[dict]
             from ..render import render
 
             result = render(cfg, d, None, rep)
+        elif kind == "scan":
+            from ..scan import scan
+
+            sc = scan(cfg, d, rep)
+            result = {"samples": len(sc["frames"]), "with_vehicles": sum(c > 0 for c in sc["counts"]),
+                      "mode": sc["mode"], "elapsed_s": sc["elapsed_s"]}
         elif kind == "preview":
             from ..pipeline import analyze
 
@@ -74,6 +80,7 @@ def run_job(kind: str, project_dir: str, q, cancel_event, params: Optional[dict]
             seconds = float((params or {}).get("seconds", 3.0))
             fps = cfg.capture_fps or data["info"]["suggested_capture_fps"]
             cfg.start_frame, cfg.end_frame = start, start + int(round(seconds * fps))
+            cfg.parts = None  # a preview looks at exactly the frames asked for
             summary = analyze(cfg, d / "preview", rep, preview_every_s=0.25)
             result = {**summary["run"], "n_vehicles": len(summary["vehicles"]),
                       "vehicles": [{k: v[k] for k in ("track_id", "speed_kmh", "valid", "flags")}
@@ -120,7 +127,7 @@ class Job:
 
 class JobManager:
     # jobs that load the detection model on the GPU (a batched analysis already saturates it)
-    GPU_KINDS = {"analyze", "preview"}
+    GPU_KINDS = {"analyze", "preview", "scan"}
 
     def __init__(self, on_change: Optional[Callable[[Job], None]] = None, slots: int = 2, gpu_slots: int = 1):
         """`on_change(job)` is called on every status transition (queued, running, finished).

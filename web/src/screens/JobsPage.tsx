@@ -3,9 +3,9 @@ import { api, JobHistoryRow } from "../api";
 import "../components/library.css";
 
 const KIND: Record<string, string> = {
-  analyze: "Analysis", render: "Render", recompute: "Recompute", preview: "Preview", proxy: "Proxy",
+  analyze: "Analysis", render: "Render", recompute: "Recompute", preview: "Preview", proxy: "Proxy", scan: "Activity scan",
 };
-const SCREEN: Record<string, string> = { analyze: "results", render: "results", recompute: "results", preview: "process", proxy: "import" };
+const SCREEN: Record<string, string> = { scan: "process", analyze: "results", render: "results", recompute: "results", preview: "process", proxy: "import" };
 
 export const fmtBytes = (n: number) =>
   n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;
@@ -21,6 +21,7 @@ function summary(j: JobHistoryRow): string {
   if (j.status !== "done") return "";
   if (j.kind === "analyze" || j.kind === "recompute") return r.n_vehicles !== undefined ? `${r.n_valid} valid of ${r.n_vehicles} vehicles` : "";
   if (j.kind === "render") return r.width ? `${r.width}×${r.height} · ${r.output_fps ? Math.round(r.output_fps) : "?"} fps${r.playback_speed && r.playback_speed !== 1 ? ` · ${r.playback_speed}× speed` : ""}` : "";
+  if (j.kind === "scan") return r.samples !== undefined ? `vehicles in ${r.with_vehicles} of ${r.samples} samples (${r.mode})` : "";
   if (j.kind === "preview") return r.tracks !== undefined ? `${r.tracks} tracks · ${r.detections_per_frame?.toFixed?.(1) ?? "?"} detections/frame` : "";
   return "";
 }

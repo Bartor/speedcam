@@ -50,6 +50,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
     panel: rs.panel ?? "right", panel_layout: rs.panel_layout ?? "overlay", panel_sort: rs.panel_sort ?? "latest",
     panel_rows: rs.panel_rows ?? 7, title: rs.title ?? "", subtitle: rs.subtitle ?? "", footer: rs.footer ?? "",
     show_hud: !!rs.show_hud, show_margin: rs.show_margin ?? true, label_position: rs.label_position ?? "above",
+    only_parts: rs.only_parts ?? true,
     scale: rs.scale === 0.5 && project.info.height > 1080 ? +(1080 / project.info.height).toFixed(4) : rs.scale,
   });
 
@@ -110,7 +111,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         output_fps: rset.output_fps === "" ? null : +rset.output_fps, lut: rset.lut || null,
         panel: rset.panel, panel_layout: rset.panel_layout, panel_sort: rset.panel_sort, panel_rows: +rset.panel_rows,
         title: rset.title, subtitle: rset.subtitle, footer: rset.footer, show_hud: rset.show_hud,
-        show_margin: rset.show_margin, label_position: rset.label_position,
+        show_margin: rset.show_margin, label_position: rset.label_position, only_parts: rset.only_parts,
       };
       setRenderJob((await api.render(project.id, body)).id);
     } catch (e) { setErr(String(e)); }
@@ -314,6 +315,10 @@ export default function ResultsScreen({ project, onChanged }: Props) {
               <option value="above">above the vehicle</option><option value="below">below the vehicle</option>
               <option value="left">left of the vehicle</option><option value="right">right of the vehicle</option>
             </select>
+            {project.config.parts && <>
+              <label title="The analysis covered only some parts of the video (activity scan): render just those, back to back">Only analysed parts</label>
+              <input type="checkbox" checked={rset.only_parts} onChange={(e) => setRset({ ...rset, only_parts: e.target.checked })} />
+            </>}
             <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
             <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
           </div>

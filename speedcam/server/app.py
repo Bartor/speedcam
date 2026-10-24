@@ -282,6 +282,24 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
         # no calibration or nothing to measure is fine: the clip is then only detected and tracked
         return jobs.submit(pid, "analyze", _dir(pid)).public()
 
+    @app.post("/api/projects/{pid}/scan")
+    def start_scan(pid: str):
+        """Activity scan: a quick pass that finds the parts of the video with vehicles."""
+        return jobs.submit(pid, "scan", _dir(pid)).public()
+
+    @app.get("/api/projects/{pid}/scan")
+    def get_scan(pid: str):
+        """The scan's timeline (vehicles per sample) and the parts it suggests with the current
+        padding and merging settings (see config.ScanSettings)."""
+        from .. import scan as activity
+
+        d = _dir(pid)
+        sc = activity.load(d)
+        if sc is None:
+            return {"scan": None, "suggested": [], "parts": store.config(pid).parts}
+        cfg = store.config(pid)
+        return {"scan": sc, "suggested": activity.suggest_parts(sc, cfg.scan), "parts": cfg.parts}
+
     @app.post("/api/projects/{pid}/preview")
     def preview_run(pid: str, frame: Optional[int] = None, seconds: float = 3.0):
         """Detect + stabilize + track a few seconds and stream annotated previews, without touching results."""

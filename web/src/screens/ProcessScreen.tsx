@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, fmt, Project, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
+import ActivityPanel from "../components/ActivityPanel";
 import "../components/library.css";
 
 interface Props { project: Project; onChanged: (p: Project) => void; onDone: () => void }
@@ -88,6 +89,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
             : <button className="danger" onClick={() => jobId && api.cancel(jobId)}>Cancel</button>}
           {project.status.results_json && !running && <button onClick={onDone}>View results →</button>}
         </div>
+        <ActivityPanel project={project} onChanged={onChanged} disabled={running} />
         <div className="camera-mode">
           <span className="muted small">Camera</span>
           <div className="seg-ctl">

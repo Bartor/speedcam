@@ -43,7 +43,7 @@ function updateTitle(jobs: ActiveJob[]) {
   document.title = `${Math.floor(p)}% · ${running.length} job${running.length > 1 ? "s" : ""} · speedcam`;
 }
 
-const LABEL: Record<string, string> = { proxy: "proxy", analyze: "analysis", render: "render", preview: "preview" };
+const LABEL: Record<string, string> = { proxy: "proxy", analyze: "analysis", render: "render", preview: "preview", scan: "activity scan" };
 
 /** Top-bar summary of everything running or queued, across projects. */
 export default function JobsIndicator() {

@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
-from . import calibration, violations
+from . import calibration, scan, violations
 from .config import ProjectConfig, RenderSettings
 from .flow import reference_positions
 from .pipeline import Reporter, find_violations, margin_of_error, resolve_capture_fps
@@ -629,7 +629,7 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
     H = max(2, int(round(info.height * rs.scale / 2)) * 2)
     typo = Typography(rs.font)
     overlay = Overlay(cfg, fps, cal, renders, tracks, transforms, (W, H), (info.width, info.height), typo, viol)
-    reader = FFmpegReader(cfg.source, W, H, rs.lut)
+    read_w, read_h = W, H
     if cfg.rotation in (90, 270):  # the output (and the panel beside it) is the rotated frame
         W, H = H, W
 
@@ -648,41 +648,51 @@ def render(cfg: ProjectConfig, out_dir: str | Path, dst: Optional[str | Path] = 
 
     out_fps = rs.output_fps or fps
     ratio = rs.playback_speed * fps / out_fps  # source frames per output frame
-    n_out = int(math.floor((info.nb_frames - 1) / ratio)) + 1
+    # the whole video, or only the analysed parts (each read from a seek), back to back
+    ranges = scan.analysis_ranges(cfg, info.nb_frames) if cfg.parts and rs.only_parts else [(0, info.nb_frames)]
+    n_out = sum(int(math.floor((b - a - 1) / ratio)) + 1 for a, b in ranges if b > a)
 
     writer = FFmpegWriter(dst, out_w, H, out_fps, rs.encoder, rs.quality)
     canvas = np.zeros((H, out_w, 3), np.uint8)
     j = 0
     t0 = time.monotonic()
     try:
-        for n, frame in enumerate(reader):
-            if j >= n_out:
-                break
-            while j < n_out and int(round(j * ratio)) == n:
-                drawn = overlay.draw(frame.copy(), n)
-                if panel is None:
-                    writer.write(drawn)
-                else:
-                    canvas[:, video_x:video_x + W] = drawn
-                    if rs.panel_layout == "overlay":
-                        _frost(canvas, panel_x, panel.W)
-                    _blend(canvas, panel_x, 0, panel.layer_at(n / fps))
-                    writer.write(canvas)
-                j += 1
-            if j % 10 == 0:
-                reporter.progress("rendering", j, n_out, fps=j / max(time.monotonic() - t0, 1e-6))
-            if reporter.cancelled():
-                raise InterruptedError("cancelled")
+        for a, b in ranges:
+            # a quarter frame early: the seek lands on frame a, not the one after it
+            reader = FFmpegReader(cfg.source, read_w, read_h, rs.lut, start_s=max(0.0, (a - 0.25) / info.container_fps))
+            try:
+                jl = 0  # output frames of this part
+                for k, frame in enumerate(reader):
+                    n = a + k
+                    if n >= b:
+                        break
+                    while a + int(round(jl * ratio)) == n:
+                        drawn = overlay.draw(frame.copy(), n)
+                        if panel is None:
+                            writer.write(drawn)
+                        else:
+                            canvas[:, video_x:video_x + W] = drawn
+                            if rs.panel_layout == "overlay":
+                                _frost(canvas, panel_x, panel.W)
+                            _blend(canvas, panel_x, 0, panel.layer_at(n / fps))
+                            writer.write(canvas)
+                        jl += 1
+                        j += 1
+                    if j % 10 == 0:
+                        reporter.progress("rendering", j, n_out, fps=j / max(time.monotonic() - t0, 1e-6))
+                    if reporter.cancelled():
+                        raise InterruptedError("cancelled")
+            finally:
+                reader.close()
     except BaseException:
         writer.abort()
         raise
-    finally:
-        reader.close()
     writer.close()
     meta = {"file": dst.name, "output_fps": out_fps, "playback_speed": rs.playback_speed, "scale": rs.scale,
             "mode": rs.mode, "frames": j, "width": out_w, "height": H, "codec": writer.codec,
             "capture_fps": fps, "panel": rs.panel, "panel_layout": rs.panel_layout,
-            "video_x": video_x, "video_width": W, "rotation": cfg.rotation}
+            "video_x": video_x, "video_width": W, "rotation": cfg.rotation,
+            "parts": [list(r) for r in ranges] if len(ranges) > 1 or ranges[0] != (0, info.nb_frames) else None}
     (out / "render.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     reporter.progress("done", 1, 1)
     return meta

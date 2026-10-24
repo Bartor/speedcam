@@ -47,6 +47,30 @@ def iter_frames(path: str | Path, start: int = 0, end: Optional[int] = None,
             yield i, frame.to_ndarray(format="bgr24")
 
 
+def iter_ranges(path: str | Path, ranges: list[tuple[int, int]]) -> Iterator[tuple[int, np.ndarray]]:
+    """Yield (frame_index, bgr) for the frames in each [start, end) range, seeking to each (indices
+    as in iter_frames). Ranges close together are read straight through instead."""
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        fps = _stream_fps(stream)
+        tb, t_start = float(stream.time_base), stream.start_time or 0
+        last = -10**9
+        it = None
+        for a, b in ranges:
+            if it is None or not (last < a <= last + int(2 * fps)):
+                container.seek(int(a / fps / tb) + t_start, stream=stream, backward=True, any_frame=False)
+                it = container.decode(stream)
+            for frame in it:
+                i = int(round((frame.pts - t_start) * tb * fps)) if frame.pts is not None else last + 1
+                last = i
+                if i < a:
+                    continue
+                if i >= b:
+                    break
+                yield i, frame.to_ndarray(format="bgr24")
+
+
 class FrameGrabber:
     """Random access to frames of the original video by index (seek + decode forward)."""
 
@@ -172,7 +196,7 @@ def build_proxy(src: str | Path, dst: str | Path, total_frames: int, height: int
 class FFmpegReader:
     """Sequential decode through ffmpeg (optional LUT and scaling) into BGR frames."""
 
-    def __init__(self, src: str | Path, width: int, height: int, lut: Optional[str] = None):
+    def __init__(self, src: str | Path, width: int, height: int, lut: Optional[str] = None, start_s: float = 0.0):
         filters = []
         if lut:
             lut_path = str(Path(lut).resolve()).replace("\\", "/").replace(":", "\\:")
@@ -180,7 +204,8 @@ class FFmpegReader:
         filters.append(f"scale={width}:{height}:flags=bicubic")
         self.w, self.h = width, height
         self.proc = subprocess.Popen(
-            ["ffmpeg", "-hide_banner", "-v", "error", "-noautorotate", "-i", str(src), "-map", "0:v:0", "-an",
+            ["ffmpeg", "-hide_banner", "-v", "error", "-noautorotate",
+             *(["-ss", f"{start_s:.6f}"] if start_s > 0 else []), "-i", str(src), "-map", "0:v:0", "-an",
              "-vf", ",".join(filters), "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
             stdout=subprocess.PIPE, bufsize=width * height * 3 * 2,
         )

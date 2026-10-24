@@ -75,6 +75,7 @@ export interface ProjectConfig {
   detection: Record<string, any>; tracking: Record<string, any>; stabilization: Record<string, any>;
   speed: Record<string, any>; render: Record<string, any>; stats: Record<string, any>;
   violations?: Record<string, any>;
+  parts?: [number, number][] | null;
 }
 
 export interface Job {
@@ -179,6 +180,13 @@ export interface JobHistoryRow {
   files: { name: string; size: number }[];
 }
 
+export interface ScanResult {
+  scan: { frames: number[]; counts: number[]; moving?: number[]; mode: string; nb_frames: number; container_fps: number;
+    duration_s: number; elapsed_s: number; model: string } | null;
+  suggested: [number, number][];
+  parts: [number, number][] | null;
+}
+
 export interface Results {
   capture_fps: number; container_fps: number; nb_frames: number; vehicles: Vehicle[]; stats: Stats;
   by_direction: Record<string, Stats>; timing_warnings: string[];
@@ -220,6 +228,8 @@ export const api = {
   create: (source: string, name?: string) => req<Project & { existing?: boolean }>("POST", "/api/projects", { source, name }),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),
   patch: (id: string, body: Record<string, unknown>) => req<Project>("PATCH", `/api/projects/${id}`, body),
+  scan: (id: string) => req<Job>("POST", `/api/projects/${id}/scan`),
+  getScan: (id: string) => req<ScanResult>("GET", `/api/projects/${id}/scan`),
   readLights: (id: string, frame: number) =>
     req<{ frame: number; stabilized: boolean; setups: { name: string; state: string; counts: [number, number, number][] }[] }>(
       "GET", `/api/projects/${id}/lights/${frame}`),

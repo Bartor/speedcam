@@ -159,7 +159,20 @@ speedcam serve            # http://127.0.0.1:8000, projects stored in ~/speedcam
    violation checks, without lines A/B or paths.
    **Nothing set up is fine too:** without a calibration, or with nothing to measure, the
    analysis only detects and tracks; calibrate and draw lines later and press Recompute.
-3. **Process:** choose **Camera: Hovering** (stabilize every frame) or **Still**
+3. **Process:**
+   **Activity scan (long videos, CCTV):** *Scan for vehicles* reads about one frame a
+   second at the detection size (1280 px), only keyframes where the file has them every
+   2 s or less, with the analysis's own detector. A timeline shows moving vehicles per
+   second (bright) and all of them (dim). A box that stays put between neighbouring
+   samples is a parked or waiting vehicle, so a street of parked cars isn't "activity".
+   *Analyse only the parts with vehicles* keeps the parts with moving vehicles, padded
+   by 2 s and with gaps under 5 s joined. The analysis then seeks to each part, and
+   tracking starts fresh in each one. Frame numbers and times stay those of the whole
+   video. Stabilization registers every frame to the reference frame, so jumps are fine:
+   it re-finds the reference after each. The render covers only those parts too, back to
+   back (optional). Measured: a 57 s 4K HEVC clip scans in ~21 s, mostly decoding;
+   1080p H.264 is much faster.
+ choose **Camera: Hovering** (stabilize every frame) or **Still**
    (skip stabilization, faster). A preview run with stabilization on measures camera
    drift against the reference frame, in px and in cm on the ground, and says whether
    skipping is safe. **Preview tracking** runs detection, stabilization and tracking on a
