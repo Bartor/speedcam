@@ -1,0 +1,82 @@
+# Publishes a version: push a tag like v0.2.0 (matching `version` in pyproject.toml) and this
+# builds speedcam-0.2.0.zip, the source with the web UI already built, and attaches it to a
+# GitHub release. Users download it, unzip it and run speedcam.cmd / speedcam.sh: no git, no
+# Node.js (the launcher installs the Python side on first run).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches pyproject.toml
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Tag $TAG doesn't match version $VERSION in pyproject.toml"; exit 1
+          fi
+
+      - name: Build the web UI
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Package
+        run: |
+          python launch.py --ui-hash > speedcam/server/static/.ui-hash
+          NAME="speedcam-$VERSION"
+          mkdir dist
+          # the tracked source (line endings per .gitattributes: .cmd CRLF, .sh LF, mode kept)
+          git archive --format=tar --prefix="$NAME/" HEAD | tar -x -C dist
+          cp -r speedcam/server/static "dist/$NAME/speedcam/server/"
+          (cd dist && zip -qr "$NAME.zip" "$NAME")
+          ls -l "dist/$NAME.zip"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install
+
+          1. Install **Python 3.11+** and **ffmpeg** (Windows: \`winget install Python.Python.3.12 Gyan.FFmpeg\`;
+             macOS: \`brew install python@3.12 ffmpeg\`; Linux: \`sudo apt install python3 python3-venv ffmpeg\`).
+          2. Download **speedcam-$VERSION.zip** below and unzip it anywhere.
+          3. Double-click **speedcam.cmd** (Windows) or run **./speedcam.sh** (macOS/Linux).
+
+          The first start takes a few minutes: it installs the Python packages (with CUDA PyTorch when an
+          NVIDIA GPU is present), then opens the app in your browser. \`speedcam --check\` lists anything missing.
+
+          EOF
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" "dist/speedcam-$VERSION.zip" --title "speedcam $VERSION" \
+            --notes-file notes.md --generate-notes --verify-tag

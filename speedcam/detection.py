@@ -4,6 +4,8 @@ A simple colour-blob detector is included for synthetic validation clips.
 """
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -12,6 +14,8 @@ import cv2
 import numpy as np
 
 from .config import DetectionSettings
+
+log = logging.getLogger(__name__)
 
 CLASSES = ["car", "truck", "bus", "motorcycle"]
 # DOTA (OBB models) has no car/truck split: map its vehicle classes onto ours.
@@ -176,14 +180,50 @@ class BlobDetector:
 
 # Models trained for speedcam (not on the Ultralytics hub) live here; refer to them by short name.
 MODELS_DIR = Path.home() / "speedcam-models"
-NAMED_MODELS = {"visdrone": "yolo11x-visdrone.pt"}  # yolo11x fine-tuned on VisDrone2019-DET at 1280 px
+# speedcam's own models: file name and SHA-256. Downloaded on first use from the project's
+# "models" release (SPEEDCAM_MODELS_BASE points elsewhere), like Ultralytics does with its own.
+NAMED_MODELS = {
+    # yolo11x fine-tuned on VisDrone2019-DET at 1280 px (tools/train_visdrone.py)
+    "visdrone": ("yolo11x-visdrone.pt", "69e81b12123e3f01f8b69a69fdb77336986bbb4907c08288f3cfef473fc1636e"),
+}
+MODELS_BASE = os.environ.get("SPEEDCAM_MODELS_BASE", "https://github.com/Bartor/speedcam/releases/download/models")
+_unavailable: set[str] = set()  # failed downloads: don't retry within this process
+
+
+def _download(url: str, dst: Path, sha256: str) -> None:
+    """Fetch `url` to `dst`, accepting it only if its SHA-256 matches."""
+    import hashlib
+    import urllib.request
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    h = hashlib.sha256()
+    log.info("Downloading %s ...", url)
+    with urllib.request.urlopen(url, timeout=30) as r, open(tmp, "wb") as f:
+        while chunk := r.read(1 << 20):
+            h.update(chunk)
+            f.write(chunk)
+    if h.hexdigest() != sha256:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"{url}: checksum mismatch, file discarded")
+    tmp.replace(dst)
 
 
 def resolve_model(name: str) -> str:
+    """Path or Ultralytics name of a model; speedcam's own models are downloaded on first use.
+    FileNotFoundError when one isn't available (offline, not published): Auto then skips it."""
     if name in NAMED_MODELS:
-        p = MODELS_DIR / NAMED_MODELS[name]
+        fname, sha = NAMED_MODELS[name]
+        p = MODELS_DIR / fname
         if not p.is_file():
-            raise FileNotFoundError(f"Model '{name}' not found at {p}. It's trained locally (see README).")
+            if name in _unavailable:
+                raise FileNotFoundError(f"Model '{name}' isn't available")
+            try:
+                _download(f"{MODELS_BASE}/{fname}", p, sha)
+            except Exception as e:  # noqa: BLE001 - offline, 404, checksum: the model is just missing
+                _unavailable.add(name)
+                raise FileNotFoundError(f"Model '{name}' isn't at {p} and couldn't be downloaded ({e}). "
+                                        "Train it with tools/train_visdrone.py, or connect to the internet.") from e
         return str(p)
     return name
 

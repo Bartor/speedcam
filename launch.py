@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
+import re
+import time
 import shutil
 import subprocess
 import sys
@@ -221,6 +224,36 @@ def ensure_ui() -> None:
     say("Web UI built.")
 
 
+def local_version() -> str:
+    m = re.search(r'^version\s*=\s*"([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else "0"
+
+
+def check_for_update(force: bool = False) -> None:
+    """At most once a day: is there a newer release than this copy? Only prints; never blocks
+    or fails the start (3 s timeout, no network = no message). SPEEDCAM_NO_UPDATE_CHECK=1 skips it."""
+    if os.environ.get("SPEEDCAM_NO_UPDATE_CHECK"):
+        return
+    stamp = VENV / ".update-check"
+    if not force and stamp.exists() and time.time() - stamp.stat().st_mtime < 86400:
+        return
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{UI_REPO}/releases/latest",
+                                     headers={"Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            latest = json.load(r).get("tag_name", "").lstrip("v")
+    except (OSError, ValueError):
+        return
+    if VENV.exists():
+        stamp.touch()
+    num = lambda v: tuple(int(x) for x in re.findall(r"\d+", v)[:3])  # noqa: E731
+    mine = local_version()
+    if latest and num(latest) > num(mine):
+        say(f"speedcam {latest} is available (this is {mine}): https://github.com/{UI_REPO}/releases/latest")
+        say("  download the new zip and copy what's inside it over this folder (installed packages are "
+            "reused; projects live in ~/speedcam-projects), or run 'git pull' if you cloned the repository.")
+
+
 def make_shortcut() -> None:
     if not WIN:
         sys.exit("--shortcut is only implemented for Windows; on macOS/Linux alias ./speedcam.sh instead.")
@@ -240,7 +273,9 @@ def main(argv: list[str]) -> int:
         print(ui_hash())
         return 0
     if "--check" in argv:
+        say(f"speedcam {local_version()}")
         good = check_requirements(report=True)
+        check_for_update(force=True)
         say("Ready: run speedcam to install and start." if good else "Install what's missing above, then run this again.")
         return 0 if good else 1
     if "--shortcut" in argv:
@@ -260,6 +295,7 @@ def main(argv: list[str]) -> int:
     if setup_only:
         say("Setup complete.")
         return 0
+    check_for_update()
     args = argv or ["serve"]
     exe = VENV / ("Scripts/speedcam.exe" if WIN else "bin/speedcam")
     try:

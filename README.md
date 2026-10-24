@@ -18,19 +18,29 @@ browser UI served from your own machine. No video is uploaded anywhere.
 
 ## Install
 
+1. Install **Python 3.11+** and **ffmpeg** (commands below).
+2. Download **speedcam-x.y.z.zip** from the
+   [latest release](https://github.com/Bartor/speedcam/releases/latest) and unzip it
+   anywhere. No git or Node.js needed: the web UI comes prebuilt.
+3. Double-click `speedcam.cmd` (Windows) or run `./speedcam.sh` (macOS/Linux).
+
+To update, the launcher tells you when a new version is out: copy the new zip's
+contents over the folder. Installed packages are reused, and projects live in
+`~/speedcam-projects`. Developers can `git clone` the repository instead; the launcher
+then builds or downloads the UI for whatever is checked out.
+
 **Windows** (in PowerShell or a terminal):
 
 ```bash
 winget install Python.Python.3.12 Gyan.FFmpeg
 ```
 
-Open a new terminal so `PATH` picks them up, download or clone this repository, then
-double-click `speedcam.cmd` (or run it from the folder).
+Open a new terminal so `PATH` picks them up.
 
-**macOS**: `brew install python@3.12 ffmpeg`, then `./speedcam.sh` in this folder.
+**macOS**: `brew install python@3.12 ffmpeg`.
 
-**Linux** (Debian/Ubuntu): `sudo apt install python3 python3-venv ffmpeg`,
-then `./speedcam.sh`. For an NVIDIA GPU, install the driver first; the launcher picks
+**Linux** (Debian/Ubuntu): `sudo apt install python3 python3-venv ffmpeg`.
+For an NVIDIA GPU, install the driver first; the launcher picks
 CUDA PyTorch when `nvidia-smi` works.
 
 Not sure what's missing? `speedcam --check` (`speedcam.cmd --check` / `./speedcam.sh --check`)
@@ -106,8 +116,8 @@ Any model can still be chosen on its own on the Process screen.
 **VisDrone (trained)** is an optional third detector: `yolo11x` fine-tuned on
 VisDrone2019-DET (drone footage of city traffic at many heights and angles), with
 `tools/train_visdrone.py`. It took 6.5 h on an RTX 3080 Ti at 1280 px, batch 2, and
-scored car mAP50 0.908 (all 10 VisDrone classes: 0.619). Weights go in
-`~/speedcam-models/yolo11x-visdrone.pt`. Compared with Auto on full analyses of
+scored car mAP50 0.908 (all 10 VisDrone classes: 0.619). The weights download on first use
+from the `models` release into `~/speedcam-models/`. Compared with Auto on full analyses of
 three real clips:
 
 | Clip | Valid vehicles, Auto → VisDrone | Same car's speed | Analysis time |
@@ -351,6 +361,22 @@ camera sway and per-frame position jitter. It stores the clip as 30 fps
   facing the camera, so colour reading is only tested on synthetic images and on
   a typed-phase setup over real tracks.
 - Non-goals for v1: real-time processing, live feed, oblique angles, multi-drone fusion.
+
+## Publishing (maintainers)
+
+- **A version:** set `version` in `pyproject.toml`, commit, then tag and push it:
+  `git tag v0.2.0 && git push origin v0.2.0`. The *Release* workflow checks the tag matches
+  `pyproject.toml`, builds the web UI, and publishes `speedcam-0.2.0.zip` (source plus
+  built UI) on a release with install notes. Launchers of older versions then say a new
+  one is out.
+- **The web UI between versions:** every push to `main` that changes `web/` publishes
+  `ui-<hash>.zip` to the `ui-latest` prerelease. Git checkouts download it instead of
+  needing Node.js.
+- **Model weights:** `speedcam` downloads its own models on first use from the release
+  tagged `models`, and checks each file's SHA-256 (`NAMED_MODELS` in
+  `speedcam/detection.py`). To publish one, create that release once (as a prerelease, so it
+  never shows as the latest version) and attach the file, e.g. `yolo11x-visdrone.pt`.
+  Ultralytics fetches its own weights (`yolo11x.pt`, `yolo11x-obb.pt`) by itself.
 
 ## License
 

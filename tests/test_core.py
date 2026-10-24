@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -487,3 +488,42 @@ def test_rotated_clip_keeps_stored_orientation(tmp_path):
         assert not any(sd.type.name == "DISPLAYMATRIX" for sd in getattr(c.streams.video[0], "side_data", []) or [])
     assert subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream_side_data", "-of", "csv=p=0", str(proxy)],
                           capture_output=True, text=True).stdout.strip() == ""
+
+
+def test_named_model_downloaded_with_checksum(tmp_path, monkeypatch):
+    import hashlib
+    import http.server
+    import threading
+
+    from speedcam import detection
+
+    served = tmp_path / "served"
+    served.mkdir()
+    (served / "m.pt").write_bytes(b"weights")
+    good = hashlib.sha256(b"weights").hexdigest()
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=str(served), **k)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(detection, "MODELS_DIR", tmp_path / "models")
+        monkeypatch.setattr(detection, "MODELS_BASE", f"http://127.0.0.1:{srv.server_address[1]}")
+        monkeypatch.setattr(detection, "_unavailable", set())
+        monkeypatch.setattr(detection, "NAMED_MODELS", {"ok": ("m.pt", good), "bad": ("m.pt", "0" * 64),
+                                                        "gone": ("missing.pt", good)})
+        assert Path(detection.resolve_model("ok")).read_bytes() == b"weights"
+        assert detection.resolve_model("yolo11x.pt") == "yolo11x.pt"  # Ultralytics' own: untouched
+        (tmp_path / "models" / "m.pt").unlink()
+        with pytest.raises(FileNotFoundError, match="checksum"):
+            detection.resolve_model("bad")
+        assert not (tmp_path / "models" / "m.pt").exists()
+        with pytest.raises(FileNotFoundError, match="404"):
+            detection.resolve_model("gone")
+    finally:
+        srv.shutdown()
