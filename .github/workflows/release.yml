@@ -68,6 +68,13 @@ jobs:
           cat > notes.md <<EOF
           ## Install
 
+          **One line** (installs Python and ffmpeg if needed, then this release):
+
+          - Windows (PowerShell): \`irm https://raw.githubusercontent.com/Bartor/speedcam/main/install.ps1 | iex\`
+          - macOS / Linux: \`curl -fsSL https://raw.githubusercontent.com/Bartor/speedcam/main/install.sh | sh\`
+
+          **By hand:**
+
           1. Install **Python 3.11+** and **ffmpeg** (Windows: \`winget install Python.Python.3.12 Gyan.FFmpeg\`;
              macOS: \`brew install python@3.12 ffmpeg\`; Linux: \`sudo apt install python3 python3-venv ffmpeg\`).
           2. Download **speedcam-$VERSION.zip** below and unzip it anywhere.

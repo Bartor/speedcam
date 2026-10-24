@@ -1,5 +1,25 @@
 # speedcam
 
+## Get it
+
+**Windows** — in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Bartor/speedcam/main/install.ps1 | iex
+```
+
+**macOS / Linux** — in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bartor/speedcam/main/install.sh | sh
+```
+
+That's all. It installs Python and ffmpeg if they're missing (winget on Windows, Homebrew on
+macOS, your package manager on Linux), downloads the latest release, installs the Python
+packages (a few minutes and ~3 GB the first time, with CUDA PyTorch on an NVIDIA GPU) and opens
+the app in your browser. Run the same command again to update; your projects are kept. The
+app lives in `%LOCALAPPDATA%\speedcam` (Windows, with a desktop shortcut) or `~/speedcam`.
+
 Measures vehicle speeds from drone footage (straight down or at an angle), and checks
 red-light running and solid-line crossings. It exports a per-vehicle CSV/JSON and an
 annotated MP4. Everything runs locally: a Python analysis package with a CLI, plus a
@@ -16,7 +36,9 @@ browser UI served from your own machine. No video is uploaded anywhere.
 | GPU | NVIDIA with ~8 GB VRAM recommended | Works without one, but analysis is 10–50× slower |
 | Disk | ~6 GB for the install | PyTorch with CUDA is ~3 GB; YOLO weights download on first use |
 
-## Install
+## Install by hand
+
+If you'd rather not run the one-line installer:
 
 1. Install **Python 3.11+** and **ffmpeg** (commands below).
 2. Download **speedcam-x.y.z.zip** from the

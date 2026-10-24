@@ -251,8 +251,8 @@ def check_for_update(force: bool = False) -> None:
     mine = local_version()
     if latest and num(latest) > num(mine):
         say(f"speedcam {latest} is available (this is {mine}): https://github.com/{UI_REPO}/releases/latest")
-        say("  download the new zip and copy what's inside it over this folder (installed packages are "
-            "reused; projects live in ~/speedcam-projects), or run 'git pull' if you cloned the repository.")
+        say("  to update, run the installer again (https://github.com/" + UI_REPO + "#get-it), or copy the "
+            "new zip's contents over this folder, or 'git pull' if you cloned the repository.")
 
 
 def make_shortcut() -> None:
