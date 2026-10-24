@@ -59,7 +59,8 @@ MAC = sys.platform == "darwin"
 HOW = {
     "python": {"win": "winget install Python.Python.3.12   (or python.org/downloads; tick 'Add python.exe to PATH')",
                "mac": "brew install python@3.12   (or python.org/downloads)",
-               "linux": "sudo apt install python3.12 python3.12-venv   (or your distribution's package)"},
+               "linux": "sudo apt install python3 python3-venv (Ubuntu 22.04: python3.11 python3.11-venv)   "
+                        "or the one-line installer (https://github.com/Bartor/speedcam#get-it)"},
     "ffmpeg": {"win": "winget install Gyan.FFmpeg   (then open a new terminal so PATH updates)",
                "mac": "brew install ffmpeg",
                "linux": "sudo apt install ffmpeg"},

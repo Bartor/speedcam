@@ -33,6 +33,8 @@ SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
     SUDO="sudo"
 fi
+# apt without questions (e.g. tzdata's timezone prompt on a fresh system)
+APT="$SUDO env DEBIAN_FRONTEND=noninteractive apt-get"
 
 install_deps() {
     if [ "$(uname)" = "Darwin" ]; then
@@ -43,12 +45,12 @@ install_deps() {
         brew install python@3.12 ffmpeg
     elif command -v apt-get >/dev/null 2>&1; then
         say "Installing Python and ffmpeg with apt (your password may be asked) ..."
-        $SUDO apt-get update -qq
-        $SUDO apt-get install -y -qq python3 python3-venv ffmpeg
+        $APT update -qq
+        $APT install -y -qq python3 python3-venv ffmpeg
         # older releases (Ubuntu 22.04, Debian 12) ship Python 3.10/3.11 as python3
         if ! find_python >/dev/null; then
-            $SUDO apt-get install -y -qq python3.11 python3.11-venv ||
-                $SUDO apt-get install -y -qq python3.12 python3.12-venv ||
+            $APT install -y -qq python3.11 python3.11-venv ||
+                $APT install -y -qq python3.12 python3.12-venv ||
                 fail "This system's packages have no Python 3.11+. Install it (e.g. from deadsnakes or pyenv), then run this again."
         fi
     elif command -v dnf >/dev/null 2>&1; then
@@ -76,7 +78,7 @@ command -v ffmpeg >/dev/null 2>&1 || fail "ffmpeg isn't on PATH after installing
 if ! "$PY" -c 'import venv, ensurepip' 2>/dev/null; then
     # Debian/Ubuntu split venv out of python3
     v="$("$PY" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-    command -v apt-get >/dev/null 2>&1 && $SUDO apt-get install -y -qq "python$v-venv" || true
+    command -v apt-get >/dev/null 2>&1 && $APT install -y -qq "python$v-venv" || true
 fi
 say "Python: $("$PY" --version 2>&1) ($PY)"
 say "ffmpeg: $(command -v ffmpeg)"
