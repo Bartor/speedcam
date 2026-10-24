@@ -349,6 +349,36 @@ def test_vehicle_names_merges_looks_and_render_preview(tmp_path):
     assert client.get(f"/api/projects/{pid}/results").json()["vehicles"][0]["name"] == ""
 
 
+@pytest.mark.slow
+def test_solid_line_cases_and_their_pictures(tmp_path):
+    """A solid line drawn after the analysis, along the car's side: the car is a case (judged by
+    its box until it's outlined; the outlining job needs the segmentation model, not run here),
+    and each case frame has a picture."""
+    import pandas as pd
+
+    cfg = make_synthetic(tmp_path / "syn.mp4", speed_kmh=70.0, size=(640, 360), m_per_px=0.1)
+    client = TestClient(create_app(tmp_path / "projects"))
+    p = client.post("/api/projects", json={"source": cfg.source}).json()
+    pid = p["id"]
+    assert _wait(client, p["proxy_job"])["status"] == "done"
+    client.patch(f"/api/projects/{pid}", json={"capture_fps": 120, "detection": {"type": "blob"}})
+    client.put(f"/api/projects/{pid}/calibration", json=cfg.calibration.model_dump(mode="json"))
+    assert _wait(client, client.post(f"/api/projects/{pid}/analyze").json()["id"])["status"] == "done"
+
+    df = pd.read_parquet(tmp_path / "projects" / pid / "tracks.parquet")
+    edge = float(df[[f"c{k}y" for k in range(4)]].to_numpy().max(axis=1).mean())
+    cal = cfg.calibration.model_dump(mode="json")
+    cal["solid_lines"] = [{"name": "Edge", "points": [[0, edge + 2], [640, edge + 2]]}]  # 0.2 m below the car
+    client.put(f"/api/projects/{pid}/calibration", json=cal)
+    v = client.post(f"/api/projects/{pid}/recompute").json()["violations"]
+    assert v["masks_missing"] > 0  # the line came after the analysis: nothing outlined yet
+    [c] = v["solid_cases"]
+    assert c["source"] == "outline" and c["best_frame"] is not None and len(c["t"]) == len(c["over_m"])
+    img = client.get(f"/api/projects/{pid}/solid-case.jpg", params={"tid": c["track_id"], "frame": c["best_frame"], "line": 0})
+    assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
+    assert client.get(f"/api/projects/{pid}/solid-case.jpg", params={"tid": c["track_id"], "frame": 0, "line": 3}).status_code == 404
+
+
 def test_ui_cache_headers(tmp_path):
     """index.html is always revalidated (it names the current app code); hashed assets are
     cached for good. Without this a browser kept showing an old UI after an update."""

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import Timeline from "../components/Timeline";
 import Help, { Advanced } from "../components/Help";
 import { SettingNum } from "../components/Settings";
-import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
+import SolidCases from "../components/SolidCases";
+import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, Results, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
 import RotateButtons from "../components/RotateButtons";
@@ -534,12 +535,25 @@ export default function SetupScreen({ project, onChanged, onNext }: Props) {
                   <span className="muted">s</span>
                 </div>
               )}
+              {(vcfg.solid_mode ?? "wheels") === "wheels" && (
+                <div className="item-row small">
+                  <label className="item-row" title="Near a line, measure each vehicle by its segmentation mask (its own shape) instead of its box: ~30 ms of GPU per vehicle and frame, only near the line">
+                    <input type="checkbox" checked={vcfg.solid_masks ?? true} onChange={(e) => setViolationSetting({ solid_masks: e.target.checked })} />
+                    <span>Outline vehicles near the line</span></label>
+                  <span className="grow" />
+                  <span title="Only vehicles whose box estimate comes this close to a line are outlined">within</span>
+                  <input key={`g${vcfg.mask_gate_m}`} type="number" step="0.1" min={0} className="narrow" defaultValue={vcfg.mask_gate_m ?? 0.5}
+                    onBlur={(e) => setViolationSetting({ mask_gate_m: Math.max(0, parseFloat(e.target.value) || 0.5) })} />
+                  <span className="muted">m</span>
+                </div>
+              )}
               <p className="muted small">{(vcfg.solid_mode ?? "wheels") === "wheels"
-                ? "The vehicle's outline comes from its box and its direction of travel (a box around a car driving diagonally is much bigger than the car). In an oblique view the outline includes the car's height, so set the margin a little higher there. "
+                ? "Near the line a vehicle is measured by its segmentation mask; elsewhere (or without masks) by an outline of its class's width inside its box. Check and tune the threshold on the cases below. "
                 : ""}A lane change only counts once the vehicle is {vcfg.hysteresis_m ?? 0.5} m clear of the line on both sides, so tracking wobble along a line isn't reported. Changes apply after Recompute.</p>
             </>
           )}
         </section>
+        {solids.length > 0 && project.status.results_json && <SetupCases project={project} onChanged={onChanged} />}
 
         </>}
         </div>
@@ -554,6 +568,14 @@ export default function SetupScreen({ project, onChanged, onNext }: Props) {
       </aside>
     </div>
   );
+}
+
+/** The solid-line cases of the last analysis, to tune the threshold on (see SolidCases). */
+function SetupCases({ project, onChanged }: { project: Project; onChanged: (p: Project) => void }) {
+  const [res, setRes] = useState<Results | null>(null);
+  useEffect(() => { api.results(project.id).then(setRes).catch(() => setRes(null)); }, [project.id]);
+  if (!res?.violations) return null;
+  return <section className="panel"><SolidCases project={project} res={res} onResults={setRes} onChanged={onChanged} /></section>;
 }
 
 /** How well the calibration inputs are known: they make each speed's margin of error. */

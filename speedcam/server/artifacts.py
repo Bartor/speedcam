@@ -8,9 +8,10 @@ from pathlib import Path
 
 # outputs each kind of job writes into the project folder
 ARTIFACTS: dict[str, list[str]] = {
-    "analyze": ["results.json", "results.csv", "violations.csv", "tracks.parquet", "stabilization.csv"],
+    "analyze": ["results.json", "results.csv", "violations.csv", "tracks.parquet", "stabilization.csv", "masks.json"],
     "recompute": ["results.json", "results.csv", "violations.csv"],
     "render": ["render.mp4", "render.json"],
+    "masks": ["results.json", "results.csv", "violations.csv", "masks.json"],
 }
 SETTINGS = "settings.json"  # the project's settings when the job finished
 ALLOWED = {n for names in ARTIFACTS.values() for n in names} | {SETTINGS}

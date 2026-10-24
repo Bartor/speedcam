@@ -72,6 +72,24 @@ def run_job(kind: str, project_dir: str, q, cancel_event, params: Optional[dict]
             sc = scan(cfg, d, rep)
             result = {"samples": len(sc["frames"]), "with_vehicles": sum(c > 0 for c in sc["counts"]),
                       "mode": sc["mode"], "elapsed_s": sc["elapsed_s"]}
+        elif kind == "masks":
+            # outline the vehicles near solid lines drawn after the analysis, then recompute
+            from .. import calibration
+            from ..pipeline import load_tracks, outline_near_lines, recompute, resolve_capture_fps
+            from ..speed import compute_speeds
+            from ..timing import probe
+
+            info = probe(cfg.source)
+            fps = resolve_capture_fps(cfg, info, rep)
+            cal = calibration.for_measuring(cfg.calibration, (info.width, info.height))
+            df = load_tracks(cfg, d, cal)
+            _, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
+                                        paths=cal.path_geoms, H=cal.H)
+            n = outline_near_lines(cfg, cal, df, renders, fps, d, rep)
+            rep.progress("recomputing", 0, 1)
+            summary = recompute(cfg, d)
+            v = summary.get("violations") or {}
+            result = {"outlined": n, "n_solid_line": v.get("n_solid_line"), "cases": len(v.get("solid_cases", []))}
         elif kind == "preview":
             from ..pipeline import analyze
 
@@ -127,7 +145,7 @@ class Job:
 
 class JobManager:
     # jobs that load the detection model on the GPU (a batched analysis already saturates it)
-    GPU_KINDS = {"analyze", "preview", "scan"}
+    GPU_KINDS = {"analyze", "preview", "scan", "masks"}
 
     def __init__(self, on_change: Optional[Callable[[Job], None]] = None, slots: int = 2, gpu_slots: int = 1):
         """`on_change(job)` is called on every status transition (queued, running, finished).

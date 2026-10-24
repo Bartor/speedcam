@@ -395,23 +395,22 @@ def footprint(corners: np.ndarray, heading: np.ndarray, width_px: Optional[float
     return np.array([m + a * L / 2 * h + b * w / 2 * nrm for a, b in ((1, 1), (1, -1), (-1, -1), (-1, 1))])
 
 
-def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P: np.ndarray,
-                line: np.ndarray, min_px: float, width_px: Optional[float] = None,
-                min_s: float = 0.5) -> tuple[list[tuple[float, float, float]], tuple[float, float]]:
-    """Time spans (t0, t1, max px over) when a corner of the vehicle's outline is over the line, on
-    the far side from its centre, by at least min_px; and the closest it stayed: (px, t) such that
-    it was over by at least px for min_s from t on (0 if never), to show near misses.
+def outline_series(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P: np.ndarray,
+                   line: np.ndarray, width_px: Optional[float] = None) -> Optional[dict]:
+    """Per detection of the measured track: how far the vehicle's outline is over the line (px;
+    negative = that far clear of it), on the far side from its centre.
 
     Only the detections of the measured track count: the ones the speed analysis trimmed at its
     ends are vehicles cut off by the frame edge, whose box centre isn't the vehicle's (on 0491
-    every car entering the picture looked 0.6-0.8 m over a line it never touched)."""
+    every car entering the picture looked 0.6-0.8 m over a line it never touched). Detections
+    beside neither the line nor its ends get -inf."""
     if boxes is None:
-        return [], (0.0, 0.0)
+        return None
     bt, corners = boxes
     keep = (bt >= t[0] - 1e-6) & (bt <= t[-1] + 1e-6)
     bt, corners = bt[keep], corners[keep]
     if not len(bt):
-        return [], (0.0, 0.0)
+        return None
     centre = np.column_stack([np.interp(bt, t, P[:, 0]), np.interp(bt, t, P[:, 1])])
     # direction of travel at each detection, over +-0.25 s (the overall one when stopped)
     tb, ta = np.clip(bt + 0.25, t[0], t[-1]), np.clip(bt - 0.25, t[0], t[-1])
@@ -420,17 +419,50 @@ def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P
     slow = np.linalg.norm(head, axis=1) < 1.0
     head[slow] = P[-1] - P[0]
     dc, beside_c = signed_distance(centre, line)
-    over = np.zeros(len(bt))
-    for k in range(len(bt)):
-        dk, bk = signed_distance(footprint(corners[k], head[k], width_px), line)
-        if bk.any() or beside_c[k]:
-            over[k] = max(0.0, float((-(np.sign(dc[k]) or 1.0) * dk).max()))
+    side = -np.where(dc == 0, 1.0, np.sign(dc))  # the far side from the centre
+    outlines = np.array([footprint(corners[k], head[k], width_px) for k in range(len(bt))])
+    dk, bk = signed_distance(outlines.reshape(-1, 2), line)  # all outlines' corners at once
+    dk, bk = dk.reshape(-1, 4), bk.reshape(-1, 4)
+    over = np.where(bk.any(1) | beside_c, (side[:, None] * dk).max(1), -np.inf)
+    return {"bt": bt, "corners": corners, "over": over, "side": side, "outline": outlines}
+
+
+def mask_over(contour: np.ndarray, line: np.ndarray, side: float) -> float:
+    """How far a vehicle's mask outline (reference px) is over the line on `side` (px; negative =
+    clear), counting only its points beside the line (not past its ends)."""
+    if len(contour) == 0:
+        return -np.inf
+    d, beside = signed_distance(np.asarray(contour, float), line)
+    return float((side * d[beside]).max()) if beside.any() else -np.inf
+
+
+def mask_key(frame: int, corners: np.ndarray) -> str:
+    """A detection's identity for stored masks: frame and box centre (the stored tracks never change)."""
+    c = np.asarray(corners, float).reshape(4, 2).mean(0)
+    return f"{int(frame)}:{int(round(c[0]))}:{int(round(c[1]))}"
+
+
+def rolling_median(a: np.ndarray, k: int) -> np.ndarray:
+    """Median over k neighbouring samples: a single-frame mask glitch (a mask bleeding into a lamp
+    post's shadow read 1.8 m over on 0491) doesn't make a violation."""
+    if k <= 1 or len(a) < 3:
+        return a
+    h = k // 2
+    return np.array([np.median(a[max(0, i - h): i + h + 1]) for i in range(len(a))])
+
+
+def spans_of(bt: np.ndarray, over: np.ndarray, min_px: float, min_s: float,
+             step: float) -> tuple[list[tuple[float, float, float]], tuple[float, float]]:
+    """Time spans (t0, t1, max px over) when `over` (per sample at times bt) is at least min_px,
+    samples at most 0.5 s apart; and the closest the vehicle stayed: (px, t) such that it was over
+    by at least px for min_s from t on (0 if never), to show near misses. `step`: one sample's
+    duration, added to each span's end."""
     closest = (0.0, 0.0)
     j = 0
     for k in range(len(bt)):  # windows of min_s: the least it was over within each
         while bt[k] - bt[j] > min_s:
             j += 1
-        if bt[k] - bt[j] >= 0.9 * min_s:  # (detections are frames apart, so not exactly min_s)
+        if bt[k] - bt[j] >= 0.9 * min_s:  # (samples are frames apart, so not exactly min_s)
             low = float(over[j:k + 1].min())
             if low > closest[0]:
                 closest = (low, float(bt[j]))
@@ -443,24 +475,70 @@ def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P
         j = k
         while j + 1 < len(on) and on[j + 1] and bt[j + 1] - bt[j] <= 0.5:
             j += 1
-        spans.append((float(bt[k]), float(bt[j] + (bt[1] - bt[0] if len(bt) > 1 else 0)), float(over[k:j + 1].max())))
+        spans.append((float(bt[k]), float(bt[j] + step), float(over[k:j + 1].max())))
         k = j + 1
     return spans, closest
 
 
-def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps: float,
-           samples: Optional[tuple[np.ndarray, np.ndarray]], frame_range: np.ndarray) -> dict:
-    """All violations of a clip. `renders` are the speed analysis' tracks (smoothed world
-    positions); `tracks` the raw rows, for box corners."""
-    cal, vs = cfg.calibration, cfg.violations
-    H_inv = np.linalg.inv(cal_res.H)
-    phases, warnings = light_phases(cfg, fps, frame_range, samples) if cal.red_lights else ([], [])
+def _over_spans(boxes: Optional[tuple[np.ndarray, np.ndarray]], t: np.ndarray, P: np.ndarray,
+                line: np.ndarray, min_px: float, width_px: Optional[float] = None,
+                min_s: float = 0.5) -> tuple[list[tuple[float, float, float]], tuple[float, float]]:
+    """Spans over the line by the box outline alone (see outline_series, spans_of)."""
+    s = outline_series(boxes, t, P, line, width_px)
+    if s is None:
+        return [], (0.0, 0.0)
+    bt = s["bt"]
+    return spans_of(bt, np.maximum(s["over"], 0.0), min_px, min_s, float(bt[1] - bt[0]) if len(bt) > 1 else 0.0)
 
+
+def mask_requests(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict,
+                  fps: float) -> dict[str, tuple[int, int, np.ndarray]]:
+    """The detections worth a segmentation mask: those whose box outline comes within
+    violations.mask_gate_m of a solid line (vehicles driving well clear of every line never get
+    one), on every mask_every-th frame. {mask_key: (track id, frame, corners in reference px)}."""
+    vs, cal = cfg.violations, cfg.calibration
+    if not cal.solid_lines or vs.solid_mode != "wheels" or not vs.solid_masks:
+        return {}
+    H_inv = np.linalg.inv(cal_res.H)
+    boxes = _boxes(tracks, fps)
+    out: dict[str, tuple[int, int, np.ndarray]] = {}
+    for sl in cal.solid_lines:
+        if len(sl.points) < 2:
+            continue
+        line = solid_curve(sl.points)
+        ppm = _px_per_m(cal_res.H, line)
+        for tid, r in renders.items():  # every tracked vehicle, as the line check: measured or not
+            s = outline_series(boxes.get(int(tid)), r.frames / fps, calibration.apply_h(H_inv, r.world), line,
+                               WIDTH_M.get(r.cls, 1.8) * ppm)
+            if s is None:
+                continue
+            for k in np.nonzero(s["over"] >= -vs.mask_gate_m * ppm)[0]:
+                f = int(round(s["bt"][k] * fps))
+                if f % max(1, vs.mask_every) == 0:
+                    out[mask_key(f, s["corners"][k])] = (int(tid), f, s["corners"][k])
+    return out
+
+
+def _boxes(tracks: pd.DataFrame, fps: float) -> dict[int, tuple[np.ndarray, np.ndarray]]:
     boxes: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     if len(tracks) and all(c in tracks for c in CORNER_COLS):
         for tid, g in tracks.groupby("track_id"):
             g = g.sort_values("frame")
             boxes[int(tid)] = (g["frame"].to_numpy() / fps, g[CORNER_COLS].to_numpy(float).reshape(-1, 4, 2))
+    return boxes
+
+
+def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps: float,
+           samples: Optional[tuple[np.ndarray, np.ndarray]], frame_range: np.ndarray,
+           masks: Optional[dict] = None) -> dict:
+    """All violations of a clip. `renders` are the speed analysis' tracks (smoothed world
+    positions); `tracks` the raw rows, for box corners; `masks` the stored segmentation outlines
+    ({mask_key: contour in reference px}, see masks.py), used for solid lines where present."""
+    cal, vs = cfg.calibration, cfg.violations
+    H_inv = np.linalg.inv(cal_res.H)
+    phases, warnings = light_phases(cfg, fps, frame_range, samples) if cal.red_lights else ([], [])
+
+    boxes = _boxes(tracks, fps)
     traj = {tid: (r.frames / fps, calibration.apply_h(H_inv, r.world)) for tid, r in renders.items()}
 
     red_events: list[dict] = []
@@ -495,10 +573,13 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
     red_events = dedup
 
     line_events: list[dict] = []
-    # vehicles that got over a solid line but less than overlap_m (or for less than min_duration_s):
-    # shown so the threshold can be judged against what actually happened
-    near: list[dict] = []
-    for sl in cal.solid_lines:
+    # every vehicle whose outline came near a solid line: how far over it was, sample by sample
+    # (smoothed mask measurements where there are masks, else the box outline), so the threshold
+    # and duration can be judged and tuned against what actually happened
+    cases: list[dict] = []
+    # detections near a line that should have a mask but don't yet (lines drawn after the analysis)
+    n_missing = sum(1 for key in mask_requests(cfg, cal_res, tracks, renders, fps) if key not in (masks or {}))
+    for li, sl in enumerate(cal.solid_lines):
         if len(sl.points) < 2:
             continue
         line = solid_curve(sl.points)
@@ -507,11 +588,36 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
         for tid, (t, P) in traj.items():
             r = renders[tid]
             cross = crossings(t, P, line, hyst)
-            # wheels: also spans with any box corner over the line by overlap_m (straddling)
-            spans, closest = (_over_spans(boxes.get(tid), t, P, line, vs.overlap_m * ppm, WIDTH_M.get(r.cls, 1.8) * ppm,
-                                          vs.min_duration_s)
-                              if vs.solid_mode == "wheels" else ([], (0.0, 0.0)))
-            n_before = len(line_events)
+            spans: list = []
+            source, series = None, None
+            if vs.solid_mode == "wheels":
+                s = outline_series(boxes.get(tid), t, P, line, WIDTH_M.get(r.cls, 1.8) * ppm)
+                if s is not None:
+                    bt, over = s["bt"], s["over"]
+                    source, sb, so = "outline", bt, np.maximum(over, 0.0)
+                    if masks:
+                        mk = [(k, masks[key]) for k in range(len(bt))
+                              if (key := mask_key(int(round(bt[k] * fps)), s["corners"][k])) in masks]
+                        mo = [(k, mask_over(np.asarray(c, float), line, s["side"][k])) for k, c in mk if len(c)]
+                        if len(mo) >= 3:  # outlined near the line: judge it on the masks
+                            ks = np.array([k for k, _ in mo])
+                            raw = np.array([v for _, v in mo])
+                            source, sb = "mask", bt[ks]
+                            so = np.maximum(rolling_median(np.where(np.isfinite(raw), raw, -1e9), vs.mask_smooth), 0.0)
+                    step = float(np.median(np.diff(sb))) if len(sb) > 1 else 1.0 / fps
+                    spans, closest = spans_of(sb, so, vs.overlap_m * ppm, vs.min_duration_s, step)
+                    near_line = bool(np.any(over >= -vs.mask_gate_m * ppm))
+                    if source == "mask" or near_line or cross:
+                        sel = np.linspace(0, len(sb) - 1, min(len(sb), 160)).round().astype(int) if len(sb) else []
+                        best = int(np.argmax(so)) if len(so) else 0
+                        cases.append({"line": li, "name": sl.name, "track_id": int(tid), "class": r.cls, "source": source,
+                                      "step_s": round(step, 4),
+                                      "t": [round(float(sb[i]), 3) for i in sel],
+                                      "over_m": [round(float(so[i]) / ppm, 3) for i in sel],
+                                      "max_over_m": round(float(so.max()) / ppm, 3) if len(so) else 0.0,
+                                      "closest_m": round(closest[0] / ppm, 3), "closest_t": round(closest[1], 3),
+                                      "best_frame": int(round(float(sb[best]) * fps)) if len(sb) else None,
+                                      "crossed_t": [round(c["t"], 3) for c in cross]})
 
             def event(t0: float, how: str, span=None) -> dict:
                 return {"type": "solid_line", "name": sl.name, "track_id": int(tid), "class": r.cls,
@@ -519,24 +625,27 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
                         "duration_s": None if span is None else round(span[1] - span[0], 2),
                         "t_end_s": round(t0 if span is None else max(t0, span[1]), 3),
                         "max_over_m": None if span is None else round(span[2] / ppm, 2),
+                        "measured_by": source,
                         "speed_kmh": _speed_at(r, t0, fps)}
 
-            # a centre crossing always counts; in wheels mode it starts when the box got over
+            # a centre crossing always counts; in wheels mode it starts when the outline got over
             used = set()
             for c in cross:
-                k = next((k for k, s in enumerate(spans) if s[0] - 0.5 <= c["t"] <= s[1] + 0.5), None)
+                k = next((k for k, s_ in enumerate(spans) if s_[0] - 0.5 <= c["t"] <= s_[1] + 0.5), None)
                 if k is not None:
                     used.add(k)
                 line_events.append(event(min(c["t"], spans[k][0]) if k is not None else c["t"], "crossed",
                                          spans[k] if k is not None else None))
-            for k, s in enumerate(spans):
-                if k not in used and s[1] - s[0] >= vs.min_duration_s:
-                    line_events.append(event(s[0], "straddled", s))
-            if len(line_events) == n_before and closest[0] >= 0.02 * ppm:
-                near.append({"name": sl.name, "track_id": int(tid), "class": r.cls, "t_s": round(closest[1], 3),
-                             "over_m": round(closest[0] / ppm, 2), "for_s": vs.min_duration_s})
+            for k, s_ in enumerate(spans):
+                if k not in used and s_[1] - s_[0] >= vs.min_duration_s:
+                    line_events.append(event(s_[0], "straddled", s_))
+            if cases and cases[-1]["track_id"] == int(tid) and cases[-1]["line"] == li:
+                cases[-1]["reported"] = any(e["track_id"] == int(tid) and e["name"] == sl.name for e in line_events)
     line_events.sort(key=lambda e: e["t_s"])
-    near.sort(key=lambda e: -e["over_m"])
+    cases.sort(key=lambda c: -c["max_over_m"])
+    near = [{"name": c["name"], "track_id": c["track_id"], "class": c["class"], "t_s": c["closest_t"],
+             "over_m": c["closest_m"], "for_s": vs.min_duration_s} for c in cases
+            if not c.get("reported") and c["closest_m"] >= 0.02]
 
     return {
         "lights": [{"name": p.name, "source": p.source, "read_share": p.read_share,
@@ -544,7 +653,10 @@ def detect(cfg: ProjectConfig, cal_res, tracks: pd.DataFrame, renders: dict, fps
         "red_light": red_events,
         "solid_line": line_events,
         "solid_near": near[:10],
+        "solid_cases": cases,
+        "masks_missing": n_missing,
         "overlap_m": vs.overlap_m if vs.solid_mode == "wheels" else None,
+        "min_duration_s": vs.min_duration_s,
         "n_red_light": sum(1 for e in red_events if e["violation"]),
         "n_solid_line": len(line_events),
         "warnings": warnings,

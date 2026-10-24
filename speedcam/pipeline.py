@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import calibration, scan, uncertainty, vehicles, violations
+from . import calibration, masks, scan, uncertainty, vehicles, violations
 from .config import ProjectConfig, VehicleEdits
 from .detection import make_detector
 from .flow import FlowTracker, reference_positions
@@ -370,6 +370,7 @@ def analyze(cfg: ProjectConfig, out_dir: str | Path, reporter: Optional[Reporter
     results, renders = compute_speeds(df, fps, cal.line_a_world, cal.line_b_world, cfg.speed,
                                            paths=cal.path_geoms, H=cal.H)
     budget = margin_of_error(cfg, results, renders, cal, fps)
+    outline_near_lines(cfg, cal, df, renders, fps, out, reporter)
     viol = find_violations(cfg, cal, df, renders, fps, out, reporter)
     n_fail = sum(1 for r in stab_rows if not r[1])
     if pts_anomalies:
@@ -398,7 +399,21 @@ def find_violations(cfg: ProjectConfig, cal, df: pd.DataFrame, renders: dict, fp
     if samples is None and sample and violations.needs_samples(c):
         samples = violations.sample_lights(cfg, out, reporter)
     frames = np.load(out / "transforms.npz")["frames"]
-    return violations.detect(cfg, cal, df, renders, fps, samples, frames)
+    stored = masks.load(out, cfg.violations.mask_model) if c.solid_lines else None
+    return violations.detect(cfg, cal, df, renders, fps, samples, frames, stored)
+
+
+def outline_near_lines(cfg: ProjectConfig, cal, df: pd.DataFrame, renders: dict, fps: float, out: Path,
+                       reporter: Optional[Reporter] = None) -> int:
+    """Segmentation masks for the vehicles whose outline comes near a solid line (see masks.py);
+    only the ones not stored yet. Returns how many were segmented. GPU: run it in a job."""
+    if not cfg.calibration.solid_lines or cal.method == calibration.UNCALIBRATED:
+        return 0
+    requests = violations.mask_requests(cfg, cal, df, renders, fps)
+    if not requests:
+        return 0
+    tf = np.load(out / "transforms.npz")
+    return masks.sample(cfg, out, requests, {"frames": tf["frames"], "T": tf["T"]}, reporter)["new"]
 
 
 def margin_of_error(cfg: ProjectConfig, results: list[dict], renders: dict, cal, fps: float) -> dict:

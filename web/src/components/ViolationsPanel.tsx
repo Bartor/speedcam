@@ -79,7 +79,7 @@ export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, h
                     <td>{e.type === "red_light" ? `${e.name} · stop line ${e.line}` : e.name}</td>
                     <td>{describe(e)}</td>
                     <td className="num">{e.speed_kmh != null ? e.speed_kmh.toFixed(0) : "–"}</td>
-                    <td>{e.verdict === "violation" ? <span className="status bad">{e.type === "red_light" ? "✕ ran the red" : "✕ crossed"}</span>
+                    <td>{e.verdict === "violation" ? <span className="status bad">{e.type === "red_light" ? "✕ ran the red" : e.how === "straddled" ? "✕ on the line" : "✕ crossed"}</span>
                       : e.verdict === "unknown" ? <span className="status warn" title="The light's phase isn't known at that moment">? phase unknown</span>
                         : <span className="status ok">✓ ok</span>}</td>
                   </tr>
@@ -89,7 +89,7 @@ export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, h
           </table>
         </div>
       )}
-      {(v.solid_near ?? []).length > 0 && (
+      {(v.solid_near ?? []).length > 0 && !(v.solid_cases ?? []).length && (
         <div className="near-misses">
           <div className="subhead">Over a solid line, but under the threshold</div>
           {v.solid_near!.map((e) => (

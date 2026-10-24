@@ -180,12 +180,21 @@ export interface SolidLineEvent {
   type: "solid_line"; name: string; track_id: number; class: string; t_s: number; frame: number;
   how: "crossed" | "straddled"; duration_s: number | null; max_over_m: number | null; speed_kmh: number | null;
 }
+/** A vehicle near a solid line: how far over it was per sample (m, smoothed masks or the box estimate). */
+export interface SolidCase {
+  line: number; name: string; track_id: number; class: string; source: "mask" | "outline"; step_s: number;
+  t: number[]; over_m: number[]; max_over_m: number; closest_m: number; closest_t: number;
+  best_frame: number | null; crossed_t: number[]; reported?: boolean;
+}
 export interface Violations {
   lights: { name: string; source: "colour" | "manual"; read_share: number | null; phases: Phase[] }[];
   red_light: RedLightEvent[]; solid_line: SolidLineEvent[];
   /** vehicles over a solid line by less than the threshold: how far they stayed over for min_duration_s */
   solid_near?: { name: string; track_id: number; class: string; t_s: number; over_m: number; for_s: number }[];
+  solid_cases?: SolidCase[];
+  masks_missing?: number;
   overlap_m?: number | null;
+  min_duration_s?: number;
   n_red_light: number; n_solid_line: number; warnings: string[];
 }
 export const PHASE_COLORS: Record<string, string> = { red: "#eb4034", amber: "#ffb020", green: "#2ecc71", "not red": "#5b6270", unknown: "#3a3f48" };
@@ -263,6 +272,8 @@ export const api = {
   nameVehicle: (id: string, tid: number, name: string) =>
     req<{ track_id: number; name: string }>("PUT", `/api/projects/${id}/vehicles/${tid}`, { name }),
   mergeVehicles: (id: string, ids: number[]) => req<Results>("POST", `/api/projects/${id}/vehicles/merge`, { ids }),
+  /** outline (segment) the vehicles near solid lines that have no mask yet, then recompute */
+  outline: (id: string) => req<Job>("POST", `/api/projects/${id}/masks`),
   splitVehicle: (id: string, tid: number) => req<Results>("POST", `/api/projects/${id}/vehicles/${tid}/split`),
   mergeCandidates: (id: string) => req<MergeCandidates>("GET", `/api/projects/${id}/vehicles/candidates`),
   vehicleLook: (id: string, tid: number) => req<VehicleLook>("GET", `/api/projects/${id}/vehicles/${tid}/look`),

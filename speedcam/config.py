@@ -265,6 +265,16 @@ class ViolationSettings(BaseModel):
     solid_mode: Literal["centre", "wheels"] = "wheels"
     overlap_m: float = 0.3
     min_duration_s: float = 0.5
+    # segmentation masks (the vehicle's own outline, not its box) where the box outline comes
+    # within mask_gate_m of a solid line, on every mask_every-th frame; the distance over the line
+    # is the median of mask_smooth neighbouring masks (single-frame mask glitches). On 0491 the car
+    # with its wheels on the line stayed 0.2+ m over for 1.3 s by its masks, every other car
+    # under 0.17 m; a mask includes the mirrors (~0.15 m beyond the body each side)
+    solid_masks: bool = True
+    mask_gate_m: float = 0.5
+    mask_every: int = 2
+    mask_smooth: int = 7
+    mask_model: str = "yolo11x-seg.pt"
 
 
 class ScanSettings(BaseModel):

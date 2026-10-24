@@ -66,7 +66,7 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
                     store.save_config(job.project_id, cfg)
             except (KeyError, OSError):
                 pass
-        if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render"):
+        if job.status in ("done", "error", "cancelled") and job.kind in ("proxy", "analyze", "render", "masks"):
             store.refresh(job.project_id)
 
     slots = job_slots or int(os.environ.get("SPEEDCAM_JOB_SLOTS", "2"))
@@ -647,6 +647,88 @@ def create_app(data_dir: Path, job_slots: Optional[int] = None) -> FastAPI:
     @app.get("/api/projects/{pid}/vehicles/{tid}/thumb.jpg")
     def vehicle_thumb(pid: str, tid: int):
         return FileResponse(_look(pid, tid)[0], media_type="image/jpeg")
+
+    # -- solid lines: outline vehicles near them (GPU job), and pictures of each case -------------
+    @app.post("/api/projects/{pid}/masks")
+    def outline_vehicles(pid: str):
+        """Segment the vehicles whose outline comes near a solid line (those not outlined yet),
+        then recompute: for lines drawn or moved after the analysis."""
+        d = _dir(pid)
+        if not (d / "tracks.parquet").exists():
+            raise HTTPException(400, "run analysis first")
+        return jobs.submit(pid, "masks", d).public()
+
+    @app.get("/api/projects/{pid}/solid-case.jpg")
+    def solid_case_image(pid: str, tid: int, frame: int, line: int = 0, height: int = 300):
+        """One frame of a solid-line case: the vehicle with its mask (yellow), its box outline
+        (green, the class's width along the direction of travel) and the line (red)."""
+        import cv2
+        import numpy as np
+
+        from .. import masks as mk
+        from .. import violations as vi
+        from ..stabilization import transform_points
+        from ..video import rotate_frame
+
+        d = _dir(pid)
+        t = _tracks(pid)
+        cfg, cal = t["cfg"], t["cal"]
+        lines = [s for s in cfg.calibration.solid_lines if len(s.points) >= 2]
+        if not 0 <= line < len(lines):
+            raise HTTPException(404, "no such solid line")
+        mpath = d / "masks.json"
+        key = hashlib.sha1(json.dumps([tid, frame, line, height, cfg.rotation, cfg.calibration.solid_lines[line].model_dump(mode="json"),
+                                       mpath.stat().st_mtime if mpath.exists() else None, cfg.vehicles.merges]).encode()).hexdigest()[:16]
+        f = store.cache_dir(pid, "cases") / f"{key}.jpg"
+        if f.exists():
+            return FileResponse(f, media_type="image/jpeg")
+        g = t["df"][t["df"]["track_id"] == tid].sort_values("frame")
+        row = g[g["frame"] == frame]
+        if not len(row):
+            raise HTTPException(404, f"vehicle {tid} isn't detected on frame {frame}")
+        corners = row[vi.CORNER_COLS].to_numpy(float).reshape(4, 2)
+        k = int(np.clip(np.searchsorted(t["T_frames"], frame), 0, max(0, len(t["T_frames"]) - 1)))
+        T = t["T"][k] if len(t["T"]) else np.eye(3)
+        Ti = np.linalg.inv(T)
+        img = store.grabber(pid).get(frame).copy()
+        raw = transform_points(Ti, corners)
+        x0, y0 = np.maximum(raw.min(0) - 90, 0).astype(int)
+        x1, y1 = np.minimum(raw.max(0) + 90, [img.shape[1], img.shape[0]]).astype(int)
+        crop = np.ascontiguousarray(img[y0:y1, x0:x1])
+        off = np.array([x0, y0], float)
+        to_crop = lambda pts: (transform_points(Ti, np.asarray(pts, float)) - off).astype(np.int32)  # noqa: E731
+        ln = vi.solid_curve(lines[line].points)
+        ppm = vi._px_per_m(cal.H, ln)
+        near = g[(g["frame"] >= frame - 8) & (g["frame"] <= frame + 8)]
+        head = near[["rx", "ry"]].to_numpy(float)
+        head = head[-1] - head[0] if len(head) > 1 else np.array([1.0, 0.0])
+        from ..speed import CLASSES
+
+        cls = CLASSES[int(g["cls"].mode().iloc[0])]
+        fp = vi.footprint(corners, head, vi.WIDTH_M.get(cls, 1.8) * ppm)
+        centre = corners.mean(0)
+        dc, _ = vi.signed_distance(centre[None], ln)
+        side = -1.0 if dc[0] > 0 else 1.0
+        fp_over = float((side * vi.signed_distance(fp, ln)[0]).max()) / ppm
+        contour = mk.load(d, cfg.violations.mask_model).get(vi.mask_key(frame, corners))
+        overlay = crop.copy()
+        if contour:
+            cv2.fillPoly(overlay, [to_crop(contour)], (0, 210, 255))
+            crop = cv2.addWeighted(overlay, 0.4, crop, 0.6, 0)
+            cv2.polylines(crop, [to_crop(contour)], True, (0, 210, 255), 2, cv2.LINE_AA)
+        cv2.polylines(crop, [to_crop(fp)], True, (90, 220, 90), 2, cv2.LINE_AA)
+        cv2.polylines(crop, [to_crop(ln)], False, (40, 40, 255), 2, cv2.LINE_AA)
+        if cfg.rotation:
+            crop = rotate_frame(crop, cfg.rotation)
+        z = min(1.0, height / crop.shape[0])
+        crop = cv2.resize(crop, None, fx=z, fy=z, interpolation=cv2.INTER_AREA)
+        label = f"mask {vi.mask_over(np.asarray(contour, float), ln, side) / ppm:+.2f} m" if contour else "no mask"
+        label += f" | box outline {fp_over:+.2f} m"
+        cv2.rectangle(crop, (0, 0), (crop.shape[1], 22), (20, 20, 20), -1)
+        cv2.putText(crop, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.imwrite(str(f), crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        store._prune(f.parent, 600)
+        return FileResponse(f, media_type="image/jpeg")
 
     # -- render preview: one frame exactly as the render draws it -----------------------------
     prep_cache: dict[str, tuple[str, dict]] = {}

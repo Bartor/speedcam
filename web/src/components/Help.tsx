@@ -107,6 +107,13 @@ export const HELP: Record<string, { title: string; body: string[] }> = {
     title: "Violations",
     body: ["Red-light runs and solid-line crossings, with the light's phase timeline. Click a row to watch it. Change the lines or their settings in Setup → Rules, then Recompute."],
   },
+  "setup.cases": {
+    title: "Solid-line cases",
+    body: [
+      "Every vehicle whose outline came within the gate distance of a solid line, with how far over the line it was over time. Near a line each vehicle is outlined by a segmentation mask (its own shape, not its box), on every other frame; the curve is the median of a few masks.",
+      "Move the threshold and duration to see which cases they report, check doubtful ones on their frames, then save. A lane change (the vehicle's centre crossing the line) is always reported.",
+    ],
+  },
   "setup.tolerances": {
     title: "Tolerances",
     body: [

@@ -8,6 +8,7 @@ import Histogram from "../components/Histogram";
 import TrackOverlay, { OverlayData } from "../components/TrackOverlay";
 import SpeedProfile, { vehicleEvents } from "../components/SpeedProfile";
 import ViolationsPanel from "../components/ViolationsPanel";
+import SolidCases from "../components/SolidCases";
 import RotatedVideo, { VideoControls } from "../components/RotatedVideo";
 import { SortBy, SplitsPanel, VehicleCard, VehicleList } from "../components/Vehicles";
 
@@ -269,11 +270,16 @@ export default function ReviewScreen({ project, onChanged, onExport, onSetup }: 
         )}
 
         {tab === "violations" && res.violations && (
-          <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
-            onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
-            hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
-            solidMode={(project.config.violations as any)?.solid_mode ?? "wheels"}
-            minDuration={(project.config.violations as any)?.min_duration_s ?? 0.5} />
+          <>
+            <ViolationsPanel res={res} tNow={tNow} selected={selected} onSeek={seekTime}
+              onPick={(tid, t) => { setSelected(tid); seekTime(t - 1.5); }}
+              hasSolid={(project.config.calibration.solid_lines ?? []).length > 0}
+              solidMode={(project.config.violations as any)?.solid_mode ?? "wheels"}
+              minDuration={(project.config.violations as any)?.min_duration_s ?? 0.5} />
+            {(res.violations.solid_cases?.length ?? 0) + (res.violations.masks_missing ?? 0) > 0 && (
+              <SolidCases project={project} res={res} onResults={gotResults} onChanged={onChanged} onSeek={seekTime} />
+            )}
+          </>
         )}
 
         {tab === "splits" && (!cands ? <p className="muted small">Looking for vehicles the tracker split in two…</p>
