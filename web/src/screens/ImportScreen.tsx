@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Help from "../components/Help";
 import RotateButtons from "../components/RotateButtons";
 import { api, fmt, JobRecord, Project, timeAgo, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
@@ -158,7 +159,7 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
         </table>
         {info.warnings.map((w) => <div key={w} className={`banner ${info.slowmo_suspect ? "warn" : "info"}`}>{w}</div>)}
 
-        <h3>Timing</h3>
+        <h3>Timing<Help topic="import.timing" /></h3>
         <p className="muted">Real time is computed as <code>frame / capture_fps</code>. The container rate is not trusted: DJI stores 100/120 fps clips as slow motion.</p>
         <div className="form-grid">
           <label>capture_fps (real recording rate)</label>
@@ -166,7 +167,7 @@ function ProjectSetup({ project, onChanged, onNext }: { project: Project; onChan
             <input type="number" step="any" value={fps} onChange={(e) => setFps(e.target.value)} />
             {[25, 30, 50, 60, 100, 120].map((v) => <button key={v} className="chip" onClick={() => setFps(String(v))}>{v}</button>)}
           </div>
-          <label title="Only how the video is shown and rendered: calibration and results are unaffected">View rotation</label>
+          <label title="Only how the video is shown and rendered: calibration and results are unaffected">View rotation<Help topic="import.rotation" /></label>
           <div><RotateButtons project={project} onChanged={onChanged} /></div>
           <label>Known real duration (s, optional check)</label>
           <input type="number" step="any" value={dur} onChange={(e) => setDur(e.target.value)} placeholder="e.g. from flight log" />

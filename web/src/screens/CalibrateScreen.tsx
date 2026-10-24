@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Help from "../components/Help";
 import { api, Calibration, CalibrationResult, fmt, LIGHT_COLORS, MotionPath, PATH_COLORS, PHASE_COLORS, Project, RedLightSetup, SOLID_COLOR, SolidLine, StopDirection, useDebounced, useVideoFrame } from "../api";
 import FrameCanvas, { rectDims, Tool } from "../components/FrameCanvas";
 import RotatedVideo from "../components/RotatedVideo";
@@ -24,6 +25,10 @@ const TOOLS: { key: Tool; label: string; hint: string; group: ToolGroup; color?:
 const GROUPS: { key: ToolGroup; label?: string }[] = [
   { key: "nav" }, { key: "cal", label: "Calibration" }, { key: "lines", label: "Measure" }, { key: "rules", label: "Violations" }, { key: "area", label: "Area" },
 ];
+
+const GROUP_HELP: Partial<Record<ToolGroup, string>> = {
+  cal: "calibrate.calibration", lines: "calibrate.measure", rules: "calibrate.solid", area: "calibrate.area",
+};
 
 export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
   const info = project.info;
@@ -151,7 +156,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         <div className="toolbar" role="toolbar" aria-label="Calibration tools">
           {GROUPS.map((g) => (
             <div key={g.key} className="tool-group">
-              {g.label && <span className="tool-group-label">{g.label}</span>}
+              {g.label && <span className="tool-group-label">{g.label}{GROUP_HELP[g.key] && <Help topic={GROUP_HELP[g.key]!} />}</span>}
               <div className="tool-btns">
                 {TOOLS.filter((t) => t.group === g.key).map((t) => (
                   <button key={t.key} className={tool === t.key ? "tool active" : "tool"} aria-pressed={tool === t.key}
@@ -202,7 +207,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
       <aside className="cal-side">
         <div className="cal-side-scroll">
         <section className="panel">
-          <div className="row"><h3 className="grow">Calibration</h3><span className={`tag ${saving === "error" ? "bad" : saving === "saved" ? "ok" : ""}`}>{saving === "saving" ? "saving…" : saving === "saved" ? "saved" : saving === "error" ? "save failed" : ""}</span></div>
+          <div className="row"><h3 className="grow">Calibration<Help topic="calibrate.calibration" /></h3><span className={`tag ${saving === "error" ? "bad" : saving === "saved" ? "ok" : ""}`}>{saving === "saving" ? "saving…" : saving === "saved" ? "saved" : saving === "error" ? "save failed" : ""}</span></div>
           {result.error ? <div className="banner warn">{result.error}</div> : (
             <table className="kv">
               <tbody>
@@ -321,7 +326,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
-          <h3>Paths of motion {paths.length > 0 && <span className="muted small">({paths.length})</span>}</h3>
+          <h3>Paths of motion<Help topic="calibrate.measure" /> {paths.length > 0 && <span className="muted small">({paths.length})</span>}</h3>
           {paths.map((pp, k) => {
             const dr = result.paths?.[k];
             return (
@@ -357,7 +362,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
-          <h3>Red lights {setups.length > 0 && <span className="muted small">({setups.length})</span>}</h3>
+          <h3>Red lights<Help topic="calibrate.redlights" /> {setups.length > 0 && <span className="muted small">({setups.length})</span>}</h3>
           {setups.length === 0 && <p className="muted small">Mark a traffic light with the <b>Light</b> tool and its stop line with <b>Stop line</b>. A vehicle whose front reaches the stop line while the light is red is reported. Add one setup per signal group.</p>}
           {setups.map((r, s) => {
             const color = LIGHT_COLORS[s % LIGHT_COLORS.length];
@@ -441,7 +446,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
-          <h3>Solid lines {solids.length > 0 && <span className="muted small">({solids.length})</span>}</h3>
+          <h3>Solid lines<Help topic="calibrate.solid" /> {solids.length > 0 && <span className="muted small">({solids.length})</span>}</h3>
           {solids.length === 0 && <p className="muted small">Draw a solid road marking with the <b>Solid line</b> tool. Every vehicle that crosses it, anywhere along it, is reported.</p>}
           {solids.map((sl, k) => (
             <div key={k} className="item-row">
@@ -478,7 +483,7 @@ export default function CalibrateScreen({ project, onChanged, onNext }: Props) {
         </section>
 
         <section className="panel">
-          <h3>Measurement lines & ROI</h3>
+          <h3>Measurement lines & ROI<Help topic="calibrate.area" /></h3>
           {(["line_a", "line_b"] as const).map((k) => (
             <div key={k} className="item-row">
               <span className="swatch" style={{ background: k === "line_a" ? "#00c8ff" : "#ff3cc8" }} />

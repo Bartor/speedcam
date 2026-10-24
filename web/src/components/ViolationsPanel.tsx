@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Help from "./Help";
 import { PHASE_COLORS, RedLightEvent, Results, SolidLineEvent } from "../api";
 
 interface Props {
@@ -27,7 +28,7 @@ export default function ViolationsPanel({ res, tNow, selected, onPick, onSeek, h
   return (
     <section className="panel violations">
       <div className="panel-head">
-        <h3>Violations</h3>
+        <h3>Violations<Help topic="results.violations" /></h3>
         {v.lights.length > 0 && <span className={`tag ${v.n_red_light ? "bad" : ""}`}>{v.n_red_light} red-light</span>}
         {hasSolid && <span className={`tag ${v.n_solid_line ? "bad" : ""}`}>{v.n_solid_line} solid-line</span>}
         <span className="grow" />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Help from "./Help";
 import { api, fmt, Reference, Results, Validation, Vehicle } from "../api";
 
 interface Props { projectId: string; res: Results; selected: Vehicle | undefined; tNow: number }
@@ -61,7 +62,7 @@ export default function ValidationPanel({ projectId, res, selected, tNow }: Prop
   return (
     <section className="panel">
       <div className="panel-head">
-        <h3>Validation run</h3>
+        <h3>Validation run<Help topic="results.validation" /></h3>
         {verdict && <span className={`tag ${verdict.tone}`}>{verdict.label}</span>}
         <span className="grow" />
         <button className="ghost" onClick={() => add({ t_s: tNow.toFixed(2) })} title="A reference matched by time: the vehicle between the lines at the current video time">+ at {tNow.toFixed(1)} s</button>

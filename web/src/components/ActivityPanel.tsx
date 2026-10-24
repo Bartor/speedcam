@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Help from "./Help";
 import { api, Project, ScanResult, useJob } from "../api";
 import ProgressBar from "./ProgressBar";
 
@@ -44,7 +45,7 @@ export default function ActivityPanel({ project, onChanged, disabled }: { projec
   return (
     <div className="activity">
       <div className="row">
-        <h3 className="grow">Activity</h3>
+        <h3 className="grow">Activity<Help topic="process.activity" /></h3>
         <button disabled={running || disabled} onClick={start}
           title="A quick pass over the whole video at low resolution (about one frame a second) that finds where vehicles are">
           {sc ? "Scan again" : "Scan for vehicles"}

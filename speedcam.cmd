@@ -3,8 +3,20 @@ rem speedcam launcher: double-click to start the app, or run "speedcam <command>
 rem Sets up .venv, dependencies and the web UI on first run (see launch.py).
 setlocal
 set "HERE=%~dp0"
-set "PY=python"
+set "PY="
 where py >nul 2>nul && set "PY=py -3"
+if not defined PY (
+    rem "python" may be the Microsoft Store stub, which only opens the Store: check it really runs
+    python -c "import sys" >nul 2>nul && set "PY=python"
+)
+if not defined PY (
+    echo [speedcam] Python 3.11 or newer is needed and wasn't found.
+    echo [speedcam]   install: winget install Python.Python.3.12
+    echo [speedcam]   or from https://www.python.org/downloads/ ^(tick "Add python.exe to PATH"^)
+    echo [speedcam] Then run speedcam again.
+    if "%~1"=="" pause
+    exit /b 1
+)
 
 rem The server needs no keyboard input. Feeding it NUL stops cmd.exe from asking
 rem "Terminate batch job (Y/N)?" after Ctrl+C. Other commands (e.g. calibrate) keep stdin.

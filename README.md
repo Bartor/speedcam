@@ -1,24 +1,53 @@
 # speedcam
 
-Measures vehicle speeds from nadir (straight-down) drone footage and exports a
-per-vehicle CSV/JSON and an annotated MP4. It's a local app: a Python analysis
-package with a CLI, plus a FastAPI server and a browser UI that acts as a client of
-that package.
+Measures vehicle speeds from drone footage (straight down or at an angle), and checks
+red-light running and solid-line crossings. It exports a per-vehicle CSV/JSON and an
+annotated MP4. Everything runs locally: a Python analysis package with a CLI, plus a
+browser UI served from your own machine. No video is uploaded anywhere.
 
-## Quick start
+## Requirements
 
-Needs Python 3.11+, the ffmpeg/ffprobe CLI on `PATH`, and Node.js 18+ (only to build
-the UI). Then, from this folder:
+| | Needed | Notes |
+|---|---|---|
+| OS | Windows 10/11, macOS, Linux | Developed and tested on Windows 11 |
+| Python | 3.11 or newer | The launcher creates its own virtual environment |
+| ffmpeg + ffprobe | on `PATH` | Decoding, proxies and the rendered video |
+| Node.js | 18 or newer | Only to build the web UI on the first run |
+| GPU | NVIDIA with ~8 GB VRAM recommended | Works without one, but analysis is 10–50× slower |
+| Disk | ~6 GB for the install | PyTorch with CUDA is ~3 GB; YOLO weights download on first use |
+
+## Install
+
+**Windows** (in PowerShell or a terminal):
+
+```bash
+winget install Python.Python.3.12 Gyan.FFmpeg OpenJS.NodeJS.LTS
+```
+
+Open a new terminal so `PATH` picks them up, download or clone this repository, then
+double-click `speedcam.cmd` (or run it from the folder).
+
+**macOS**: `brew install python@3.12 ffmpeg node`, then `./speedcam.sh` in this folder.
+
+**Linux** (Debian/Ubuntu): `sudo apt install python3 python3-venv ffmpeg nodejs npm`,
+then `./speedcam.sh`. For an NVIDIA GPU, install the driver first; the launcher picks
+CUDA PyTorch when `nvidia-smi` works.
+
+Not sure what's missing? `speedcam --check` (`speedcam.cmd --check` / `./speedcam.sh --check`)
+lists each requirement, says what to install, and installs nothing.
+
+## First run
 
 ```bash
 speedcam            # Windows: speedcam.cmd (or double-click it); macOS/Linux: ./speedcam.sh
 ```
 
-The first run takes a few minutes. It creates `.venv`, installs dependencies (with
-CUDA PyTorch when an NVIDIA GPU is present), builds the web UI, then starts the app
-and opens the browser. After that it starts straight away, and redoes a setup step
-only when it's needed: `pyproject.toml` changed, or the UI sources are newer than
-the build. No need to activate the venv.
+The first run takes a few minutes. It checks the requirements, creates `.venv`,
+installs dependencies (CUDA PyTorch when an NVIDIA GPU is present), builds the web UI,
+then starts the app and opens the browser at http://127.0.0.1:8000. After that it starts
+straight away, and redoes a setup step only when needed: `pyproject.toml` changed, or
+the UI sources are newer than the build. No need to activate the venv. A short tutorial
+opens the first time; the **?** buttons explain each part of the app.
 
 ```bash
 speedcam --shortcut          # desktop shortcut (Windows)
@@ -26,6 +55,16 @@ speedcam serve --jobs 3      # any CLI command works through the launcher
 speedcam analyze p.yaml --out out/
 speedcam --setup-only        # install/update without starting
 ```
+
+**Troubleshooting**
+
+- *"ffmpeg not found"* right after installing it: open a new terminal (or sign out and
+  in) so `PATH` updates.
+- *Port 8000 in use:* `speedcam serve --port 8010`.
+- *Analysis very slow:* `speedcam --check` says whether a GPU is used. With an NVIDIA GPU
+  but CPU PyTorch, delete `.venv` and run `speedcam` again.
+- *GPU out of memory:* lower *Frames per GPU batch* under Advanced settings on the
+  Process screen.
 
 Manual setup, if you prefer:
 

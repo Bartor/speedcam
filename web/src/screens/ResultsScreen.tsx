@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Help, { Advanced } from "../components/Help";
 import "../components/speed-profile.css";
 import { api, fmt, margin, marginBreakdown, Project, Results, Stats, useJob, useVideoFrame, Vehicle } from "../api";
 import MarginPanel from "../components/MarginPanel";
@@ -150,7 +151,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         {shown && (
           <section className="panel">
             <div className="panel-head">
-              <h3>Speed along the section</h3>
+              <h3>Speed along the section<Help topic="results.profile" /></h3>
               <span className="tag">#{shown.track_id} {shown.class} · {shown.direction.replace("->", " → ")}</span>
               {selected === null && <span className="muted small">fastest vehicle · click a row to pick another</span>}
             </div>
@@ -167,7 +168,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
 
         {(res.vehicles.length > 0 || !res.violations) && <section className="panel">
           <div className="panel-head">
-            <h3>Vehicles</h3>
+            <h3>Vehicles<Help topic="results.vehicles" /></h3>
             <span className="tag">{rows.length}{rows.length !== res.vehicles.length ? ` of ${res.vehicles.length}` : ""}</span>
             <span className="grow" />
             <div className="seg-ctl">
@@ -246,7 +247,7 @@ export default function ResultsScreen({ project, onChanged }: Props) {
       <aside className="res-side">
         <section className="panel">
           <div className="panel-head">
-            <h3>Speed statistics</h3>
+            <h3>Speed statistics<Help topic="results.stats" /></h3>
             {road !== "all" ? <span className="tag">{road}</span> : dir !== "all" && <span className="tag">{dir.replace("->", " → ")}</span>}
             <span className="grow" />
             {res.stats_max && (
@@ -292,22 +293,12 @@ export default function ResultsScreen({ project, onChanged }: Props) {
         </section>
 
         <section className="panel">
-          <h3>Render annotated video</h3>
+          <h3>Render annotated video<Help topic="results.render" /></h3>
           <div className="form-grid compact">
-            <label>Mode</label>
-            <select value={rset.mode} onChange={(e) => setRset({ ...rset, mode: e.target.value })}>
-              <option value="stabilized">stabilized (lines fixed)</option><option value="original">original frames</option>
-            </select>
-            <label>Output fps</label>
-            <select value={String(rset.output_fps)} onChange={(e) => setRset({ ...rset, output_fps: e.target.value })}>
-              <option value="">native ({fps} fps)</option><option value="60">60</option><option value="30">30</option>
-            </select>
             <label>Playback speed</label>
             <select value={String(rset.playback_speed)} onChange={(e) => setRset({ ...rset, playback_speed: +e.target.value })}>
               <option value="1">1× real time</option><option value="0.5">0.5×</option><option value="0.25">0.25×</option>
             </select>
-            <label>Scale</label>
-            <input type="number" step="any" value={rset.scale} onChange={(e) => setRset({ ...rset, scale: e.target.value })} />
             <label>Speed limit (colour)</label>
             <input type="number" value={rset.speed_limit_kmh} onChange={(e) => setRset({ ...rset, speed_limit_kmh: e.target.value })} />
             <label title="Side of each vehicle where its speed label goes in the video. Pick the side away from neighbouring lanes and lines, e.g. left or right when traffic runs across the picture.">Speed labels</label>
@@ -319,38 +310,51 @@ export default function ResultsScreen({ project, onChanged }: Props) {
               <label title="The analysis covered only some parts of the video (activity scan): render just those, back to back">Only analysed parts</label>
               <input type="checkbox" checked={rset.only_parts} onChange={(e) => setRset({ ...rset, only_parts: e.target.checked })} />
             </>}
-            <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
-            <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
-          </div>
-          <h4 className="subhead">Presentation</h4>
-          <div className="form-grid compact">
             <label title="Lists every vehicle's max speed as it crosses the second line, with totals">Vehicle panel</label>
             <select value={rset.panel} onChange={(e) => setRset({ ...rset, panel: e.target.value })}>
               <option value="right">right side</option><option value="left">left side</option><option value="none">off</option>
             </select>
             {rset.panel !== "none" && <>
-              <label title="Overlay keeps the video's 16:9 frame; extend adds the panel beside it (wider video)">Panel layout</label>
-              <select value={rset.panel_layout} onChange={(e) => setRset({ ...rset, panel_layout: e.target.value })}>
-                <option value="overlay">over the video (16:9)</option><option value="extend">beside the video (wider)</option>
-              </select>
-              <label>List order</label>
-              <select value={rset.panel_sort} onChange={(e) => setRset({ ...rset, panel_sort: e.target.value })}>
-                <option value="latest">latest first</option><option value="fastest">fastest first</option>
-              </select>
-              <label>Rows</label>
-              <input type="number" min={1} max={20} value={rset.panel_rows} onChange={(e) => setRset({ ...rset, panel_rows: e.target.value })} />
-              <label title="Each row shows the max speed's 95 % margin of error">Margin of error</label>
-              <input type="checkbox" checked={rset.show_margin} onChange={(e) => setRset({ ...rset, show_margin: e.target.checked })} />
               <label>Title</label>
               <input type="text" value={rset.title} placeholder="e.g. street, city" onChange={(e) => setRset({ ...rset, title: e.target.value })} />
               <label>Subtitle</label>
               <input type="text" value={rset.subtitle} placeholder="e.g. date · time" onChange={(e) => setRset({ ...rset, subtitle: e.target.value })} />
-              <label>Footer</label>
-              <input type="text" value={rset.footer} placeholder="e.g. source, handle" onChange={(e) => setRset({ ...rset, footer: e.target.value })} />
             </>}
-            <label title="Small time / frame readout in the corner">Technical readout</label>
-            <input type="checkbox" checked={rset.show_hud} onChange={(e) => setRset({ ...rset, show_hud: e.target.checked })} />
           </div>
+          <Advanced id="render">
+            <div className="form-grid compact">
+              <label>Mode</label>
+              <select value={rset.mode} onChange={(e) => setRset({ ...rset, mode: e.target.value })}>
+                <option value="stabilized">stabilized (lines fixed)</option><option value="original">original frames</option>
+              </select>
+              <label>Output fps</label>
+              <select value={String(rset.output_fps)} onChange={(e) => setRset({ ...rset, output_fps: e.target.value })}>
+                <option value="">native ({fps} fps)</option><option value="60">60</option><option value="30">30</option>
+              </select>
+              <label title="Output size as a share of the original resolution">Scale</label>
+              <input type="number" step="any" value={rset.scale} onChange={(e) => setRset({ ...rset, scale: e.target.value })} />
+              <label title="D-Log M → Rec.709 .cube, applied before drawing">LUT (.cube path)</label>
+              <input type="text" value={rset.lut} placeholder="optional" onChange={(e) => setRset({ ...rset, lut: e.target.value })} />
+              {rset.panel !== "none" && <>
+                <label title="Overlay keeps the video's 16:9 frame; extend adds the panel beside it (wider video)">Panel layout</label>
+                <select value={rset.panel_layout} onChange={(e) => setRset({ ...rset, panel_layout: e.target.value })}>
+                  <option value="overlay">over the video (16:9)</option><option value="extend">beside the video (wider)</option>
+                </select>
+                <label>List order</label>
+                <select value={rset.panel_sort} onChange={(e) => setRset({ ...rset, panel_sort: e.target.value })}>
+                  <option value="latest">latest first</option><option value="fastest">fastest first</option>
+                </select>
+                <label>Rows</label>
+                <input type="number" min={1} max={20} value={rset.panel_rows} onChange={(e) => setRset({ ...rset, panel_rows: e.target.value })} />
+                <label title="Each row shows the max speed's 95 % margin of error">Margin of error</label>
+                <input type="checkbox" checked={rset.show_margin} onChange={(e) => setRset({ ...rset, show_margin: e.target.checked })} />
+                <label>Footer</label>
+                <input type="text" value={rset.footer} placeholder="e.g. source, handle" onChange={(e) => setRset({ ...rset, footer: e.target.value })} />
+              </>}
+              <label title="Small time / frame readout in the corner">Technical readout</label>
+              <input type="checkbox" checked={rset.show_hud} onChange={(e) => setRset({ ...rset, show_hud: e.target.checked })} />
+            </div>
+          </Advanced>
           <div className="row end">
             {renderRunning ? <button className="danger" onClick={() => renderJob && api.cancel(renderJob)}>Cancel render</button>
               : <button className="primary" onClick={startRender}>{res.render ? "Re-render" : "Render"}</button>}

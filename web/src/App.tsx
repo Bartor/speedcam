@@ -6,6 +6,7 @@ import ProcessScreen from "./screens/ProcessScreen";
 import ResultsScreen from "./screens/ResultsScreen";
 import JobsIndicator from "./components/JobsIndicator";
 import JobsPage from "./screens/JobsPage";
+import Tutorial, { tutorialPending } from "./components/Tutorial";
 
 export type Screen = "import" | "calibrate" | "process" | "results";
 const SCREENS: { key: Screen; label: string }[] = [
@@ -50,6 +51,7 @@ function parseHash(): { id: string | null; screen: Screen; jobs?: boolean } {
 export default function App() {
   const [route, setRoute] = useState(parseHash);
   const [project, setProject] = useState<Project | null>(null);
+  const [tutorial, setTutorial] = useState(tutorialPending);  // opens by itself the first time
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -97,6 +99,7 @@ export default function App() {
         </nav>
         <div className="project-name" title={p?.name}>{p ? p.name : ""}</div>
         <a className={`jobs-link${route.jobs ? " active" : ""}`} href="#/jobs" title="Every job, with the files each one produced">Jobs</a>
+        <button className="tutorial-link" onClick={() => setTutorial(true)} title="A short walk through the four steps">Tutorial</button>
         <JobsIndicator />
       </header>
       {error && <div className="banner error">{error}</div>}
@@ -110,6 +113,7 @@ export default function App() {
         {p && route.screen === "process" && <ProcessScreen project={p} onChanged={setProject} onDone={() => go("results")} />}
         {p && route.screen === "results" && <ResultsScreen project={p} onChanged={setProject} />}
       </main>
+      <Tutorial open={tutorial} onClose={() => setTutorial(false)} />
     </div>
   );
 }

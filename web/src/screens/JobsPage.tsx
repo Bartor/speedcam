@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Help from "../components/Help";
 import { api, JobHistoryRow } from "../api";
 import "../components/library.css";
 
@@ -61,7 +62,7 @@ export default function JobsPage() {
     <div className="page jobs-page">
       <section className="panel">
         <div className="row wrap">
-          <h2 className="grow">Jobs {data && <span className="muted small">({rows.length}{rows.length !== data.jobs.length ? ` of ${data.jobs.length}` : ""})</span>}</h2>
+          <h2 className="grow">Jobs<Help topic="jobs" /> {data && <span className="muted small">({rows.length}{rows.length !== data.jobs.length ? ` of ${data.jobs.length}` : ""})</span>}</h2>
           <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="Project">
             <option value="all">All projects</option>
             {projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}

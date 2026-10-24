@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "speedcam"
 version = "0.1.0"
-description = "Vehicle speed measurement from nadir drone footage"
+description = "Vehicle speed, red-light and solid-line checks from drone and CCTV footage, analysed locally"
 requires-python = ">=3.11"
 dependencies = [
     "ultralytics>=8.3",

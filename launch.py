@@ -4,6 +4,7 @@
     speedcam analyze p.yaml  any other speedcam CLI command
     speedcam --shortcut      put a "speedcam" shortcut on the desktop (Windows)
     speedcam --setup-only    install / update without starting
+    speedcam --check         check the requirements and say what's missing (installs nothing)
 
 What it takes care of, only when needed:
   * creates .venv (Python 3.11+) and installs the package, with CUDA PyTorch when an NVIDIA GPU is present
@@ -35,6 +36,64 @@ def say(msg: str) -> None:
     print(f"[speedcam] {msg}", flush=True)
 
 
+MAC = sys.platform == "darwin"
+# how to install each requirement, per platform
+HOW = {
+    "python": {"win": "winget install Python.Python.3.12   (or python.org/downloads; tick 'Add python.exe to PATH')",
+               "mac": "brew install python@3.12   (or python.org/downloads)",
+               "linux": "sudo apt install python3.12 python3.12-venv   (or your distribution's package)"},
+    "ffmpeg": {"win": "winget install Gyan.FFmpeg   (then open a new terminal so PATH updates)",
+               "mac": "brew install ffmpeg",
+               "linux": "sudo apt install ffmpeg"},
+    "node": {"win": "winget install OpenJS.NodeJS.LTS   (or nodejs.org)",
+             "mac": "brew install node",
+             "linux": "sudo apt install nodejs npm   (or nodejs.org)"},
+}
+
+
+def how(what: str) -> str:
+    return HOW[what]["win" if WIN else "mac" if MAC else "linux"]
+
+
+def check_requirements(report: bool = False) -> bool:
+    """Everything needed before installing: says what's missing and how to get it. With `report`,
+    also lists what's fine (speedcam --check)."""
+    ok = True
+
+    def line(good: bool, name: str, detail: str, fix: str = "") -> None:
+        nonlocal ok
+        if not good:
+            ok = False
+        if report or not good:
+            say(f"{'OK     ' if good else 'MISSING'} {name}: {detail}")
+            if fix and not good:
+                say(f"        install: {fix}")
+
+    v = sys.version_info
+    line(v >= (3, 11), "Python 3.11+", f"this is {v.major}.{v.minor}.{v.micro}", how("python"))
+    for exe in ("ffmpeg", "ffprobe"):
+        path = shutil.which(exe)
+        line(bool(path), exe, path or "not on PATH", how("ffmpeg"))
+    built = STATIC_INDEX.exists()
+    npm = shutil.which("npm")
+    if built:
+        if report:
+            say(f"OK      web UI: built{' (Node.js found, rebuilt when the sources change)' if npm else ''}")
+    else:
+        line(bool(npm), "Node.js 18+ (to build the web UI once)", npm or "npm not on PATH", how("node"))
+    free = shutil.disk_usage(ROOT).free / 1e9
+    need = 6 if not VPY.exists() else 1
+    if free < need:
+        say(f"WARNING disk: {free:.1f} GB free here; the first install needs ~6 GB (PyTorch with CUDA is ~3 GB)")
+    elif report:
+        say(f"OK      disk: {free:.0f} GB free")
+    gpu = has_nvidia_gpu()
+    if report or not gpu:
+        say(f"{'OK     ' if gpu else 'NOTE   '} NVIDIA GPU: "
+            f"{'found, detection runs on it' if gpu else 'not found; it works on the CPU, but analysis is 10-50x slower'}")
+    return ok
+
+
 def run(cmd: list, **kw) -> None:
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
@@ -56,7 +115,7 @@ def deps_fingerprint() -> str:
 def ensure_python_env() -> None:
     if sys.version_info < (3, 11):
         sys.exit(f"speedcam needs Python 3.11 or newer (this is {sys.version.split()[0]}). "
-                 "Install it from python.org, then run this again.")
+                 f"Install it ({how('python')}), then run this again.")
     if not VPY.exists():
         say(f"First run: creating a virtual environment in {VENV} ...")
         run([sys.executable, "-m", "venv", VENV])
@@ -98,7 +157,7 @@ def ensure_ui() -> None:
             say("Web UI sources changed but Node.js isn't installed; using the existing build.")
             return
         sys.exit("The web UI hasn't been built and Node.js (npm) isn't installed. "
-                 "Install Node.js 18+ from nodejs.org, then run this again.")
+                 f"Install Node.js 18+ ({how('node')}), then run this again.")
     if not (WEB / "node_modules").exists():
         say("Installing web UI packages ...")
         run([npm, "install", "--no-audit", "--no-fund", "--loglevel=error"], cwd=WEB)
@@ -122,9 +181,16 @@ def make_shortcut() -> None:
 
 
 def main(argv: list[str]) -> int:
+    if "--check" in argv:
+        good = check_requirements(report=True)
+        say("Ready: run speedcam to install and start." if good else "Install what's missing above, then run this again.")
+        return 0 if good else 1
     if "--shortcut" in argv:
         make_shortcut()
         return 0
+    if not check_requirements():
+        say("Install what's missing above, then run this again.")
+        return 1
     setup_only = "--setup-only" in argv
     argv = [a for a in argv if a != "--setup-only"]
     try:

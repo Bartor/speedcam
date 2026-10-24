@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Help from "./Help";
 import { api, fmt, Project, Results } from "../api";
 
 interface Props { project: Project; res: Results; onRecomputed: (r: Results) => void; onProject: (p: Project) => void }
@@ -34,7 +35,7 @@ export default function MarginPanel({ project, res, onRecomputed, onProject }: P
   return (
     <section className="panel">
       <div className="panel-head">
-        <h3>Margin of error</h3>
+        <h3>Margin of error<Help topic="results.margin" /></h3>
       </div>
       {!u ? (
         <div className="banner info small">These results predate the margin of error. Press <b>Recompute speeds</b> to add it.</div>

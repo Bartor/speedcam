@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Help, { Advanced } from "../components/Help";
 import { api, fmt, Project, useJob } from "../api";
 import ProgressBar from "../components/ProgressBar";
 import ActivityPanel from "../components/ActivityPanel";
@@ -70,7 +71,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
   return (
     <div className="page two-col">
       <section className="panel grow">
-        <h2>Analysis</h2>
+        <h2>Analysis<Help topic="process.analysis" /></h2>
         <div className="row">
           <span>capture_fps <b>{cfg.capture_fps ?? "not set"}</b></span>
           <span>· frames {project.info.nb_frames}</span>
@@ -91,7 +92,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
         </div>
         <ActivityPanel project={project} onChanged={onChanged} disabled={running} />
         <div className="camera-mode">
-          <span className="muted small">Camera</span>
+          <span className="muted small">Camera<Help topic="process.camera" /></span>
           <div className="seg-ctl">
             <button className={cfg.stabilization.enabled ? "active" : ""} disabled={running}
               onClick={() => setStab(true)} title="Register every frame to the reference frame (KLT); needed when the drone sways or drifts">
@@ -107,7 +108,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
             : "Frames are assumed to line up with the reference frame. Any camera drift becomes position (and speed) error."}</span>
         </div>
         <div className="row small">
-          <button disabled={pvRunning || running} onClick={startPreview}>Preview tracking</button>
+          <button disabled={pvRunning || running} onClick={startPreview}>Preview tracking</button><Help topic="process.preview" />
           <span>from frame</span>
           <input type="number" className="narrow" value={pvFrame} onChange={(e) => setPvFrame(e.target.value)} />
           <span>for</span>
@@ -147,7 +148,7 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
         )}
       </section>
       <section className="panel side">
-        <h3>Settings</h3>
+        <h3>Settings<Help topic="process.settings" /></h3>
         <div className="row wrap small">
           <span className="muted">Model:</span>
           {["auto", "visdrone", "yolo11x.pt", "yolo11x-obb.pt"].map((m) => (
@@ -162,6 +163,9 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
           <input type="number" defaultValue={cfg.start_frame} onBlur={(e) => setRange("start_frame", e.target.value)} />
           <label>End frame</label>
           <input type="number" defaultValue={cfg.end_frame ?? ""} placeholder="end" onBlur={(e) => setRange("end_frame", e.target.value)} />
+        </div>
+        <Advanced id="process">
+        <div className="form-grid compact">
           {FIELDS.map((f) => {
             const val = cfg[f.section][f.key];
             return [
@@ -173,7 +177,9 @@ export default function ProcessScreen({ project, onChanged, onDone }: Props) {
             ];
           })}
         </div>
-        <p className="muted small">Model weights are downloaded by Ultralytics on first use. Changing speed thresholds only needs “Recompute” on the results page.</p>
+        <p className="muted small">Detector, stabilization, tracking and speed-check settings. The defaults suit most footage. Changing speed thresholds only needs “Recompute” on the results page.</p>
+        </Advanced>
+        <p className="muted small">Model weights are downloaded by Ultralytics on first use.</p>
       </section>
     </div>
   );
