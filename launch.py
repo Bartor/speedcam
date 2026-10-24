@@ -5,21 +5,28 @@
     speedcam --shortcut      put a "speedcam" shortcut on the desktop (Windows)
     speedcam --setup-only    install / update without starting
     speedcam --check         check the requirements and say what's missing (installs nothing)
+    speedcam --ui-hash       print the version hash of the web UI sources (used by CI)
 
 What it takes care of, only when needed:
   * creates .venv (Python 3.11+) and installs the package, with CUDA PyTorch when an NVIDIA GPU is present
   * reinstalls when pyproject.toml changes
-  * rebuilds the web UI when web/src is newer than the built copy (needs Node.js)
+  * gets the web UI matching this code: downloads the prebuilt one from the project's GitHub
+    releases (built by .github/workflows/ui-release.yml), or builds it with Node.js when there is
+    none (e.g. while editing the UI)
 
 Uses only the standard library, so it runs with any system Python 3.11+.
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -28,7 +35,15 @@ WIN = os.name == "nt"
 VPY = VENV / ("Scripts/python.exe" if WIN else "bin/python")
 STAMP = VENV / ".speedcam-installed"
 WEB = ROOT / "web"
-STATIC_INDEX = ROOT / "speedcam" / "server" / "static" / "index.html"
+STATIC = ROOT / "speedcam" / "server" / "static"
+STATIC_INDEX = STATIC / "index.html"
+UI_STAMP = STATIC / ".ui-hash"  # hash of the sources the built UI came from
+# prebuilt UIs: one ui-<hash>.zip per version of the UI sources on this repository's rolling
+# "ui-latest" release (forks set SPEEDCAM_UI_REPO=owner/name)
+UI_REPO = os.environ.get("SPEEDCAM_UI_REPO", "Bartor/speedcam")
+UI_RELEASE = "ui-latest"
+UI_BASE = os.environ.get("SPEEDCAM_UI_BASE", f"https://github.com/{UI_REPO}/releases/download/{UI_RELEASE}")
+UI_FILES = ["index.html", "package.json", "package-lock.json", "vite.config.ts", "tsconfig.json"]
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 
 
@@ -74,13 +89,11 @@ def check_requirements(report: bool = False) -> bool:
     for exe in ("ffmpeg", "ffprobe"):
         path = shutil.which(exe)
         line(bool(path), exe, path or "not on PATH", how("ffmpeg"))
-    built = STATIC_INDEX.exists()
     npm = shutil.which("npm")
-    if built:
-        if report:
-            say(f"OK      web UI: built{' (Node.js found, rebuilt when the sources change)' if npm else ''}")
-    else:
-        line(bool(npm), "Node.js 18+ (to build the web UI once)", npm or "npm not on PATH", how("node"))
+    if report:
+        current = built_ui_hash() == ui_hash()
+        say(f"OK      web UI: {'built for this version' if current else 'downloaded (or built) on start'}"
+            f"; Node.js {'found' if npm else 'not needed unless you change the UI'}")
     free = shutil.disk_usage(ROOT).free / 1e9
     need = 6 if not VPY.exists() else 1
     if free < need:
@@ -135,34 +148,76 @@ def ensure_python_env() -> None:
     say("Dependencies installed.")
 
 
-def newest_mtime(paths) -> float:
-    m = 0.0
-    for base in paths:
-        base = Path(base)
-        files = [base] if base.is_file() else base.rglob("*")
-        for f in files:
-            if f.is_file() and "node_modules" not in f.parts:
-                m = max(m, f.stat().st_mtime)
-    return m
+def ui_hash() -> str:
+    """Version of the web UI sources: a hash of web/src and the build files, with line endings
+    normalised so a Windows checkout (CRLF) and CI (LF) agree."""
+    files = sorted([f for f in (WEB / "src").rglob("*") if f.is_file()] +
+                   [WEB / n for n in UI_FILES if (WEB / n).is_file()])
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.relative_to(WEB).as_posix().encode() + b"\0")
+        h.update(f.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return h.hexdigest()[:16]
+
+
+def built_ui_hash() -> str:
+    return UI_STAMP.read_text().strip() if UI_STAMP.exists() and STATIC_INDEX.exists() else ""
+
+
+def download_ui(want: str) -> bool:
+    """Fetch the prebuilt UI for these sources from the GitHub release; False when there is none."""
+    url = f"{UI_BASE}/ui-{want}.zip"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            say(f"Couldn't download the prebuilt web UI ({e.code}).")
+        return False
+    except (urllib.error.URLError, OSError) as e:
+        say(f"Couldn't reach GitHub for the prebuilt web UI ({e}).")
+        return False
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        if "index.html" not in z.namelist():
+            raise zipfile.BadZipFile("no index.html")
+        tmp = STATIC.with_name("static.download")
+        shutil.rmtree(tmp, ignore_errors=True)
+        z.extractall(tmp)
+    except (zipfile.BadZipFile, OSError) as e:
+        say(f"The downloaded web UI is unusable ({e}).")
+        return False
+    (tmp / UI_STAMP.name).write_text(want)
+    shutil.rmtree(STATIC, ignore_errors=True)
+    tmp.rename(STATIC)
+    return True
 
 
 def ensure_ui() -> None:
-    sources = [WEB / "src", WEB / "index.html", WEB / "package.json", WEB / "vite.config.ts"]
-    built = STATIC_INDEX.stat().st_mtime if STATIC_INDEX.exists() else 0.0
-    if built and newest_mtime(sources) <= built:
+    """The web UI built from exactly these sources: kept if it already is, else downloaded from
+    the GitHub release (no Node.js needed), else built locally with Node.js."""
+    want = ui_hash()
+    if built_ui_hash() == want:
+        return
+    say("Getting the web UI for this version ...")
+    if download_ui(want):
+        say("Web UI downloaded.")
         return
     npm = shutil.which("npm")
     if not npm:
         if STATIC_INDEX.exists():
-            say("Web UI sources changed but Node.js isn't installed; using the existing build.")
+            say("No prebuilt web UI matches these sources and Node.js isn't installed; using the existing "
+                "build, which may be from another version.")
             return
-        sys.exit("The web UI hasn't been built and Node.js (npm) isn't installed. "
-                 f"Install Node.js 18+ ({how('node')}), then run this again.")
+        sys.exit("No prebuilt web UI matches this version (e.g. the UI was changed locally, or the release "
+                 f"build hasn't finished yet) and Node.js isn't installed to build it. Install Node.js 18+ "
+                 f"({how('node')}), or wait a few minutes after a push and run this again.")
     if not (WEB / "node_modules").exists():
         say("Installing web UI packages ...")
         run([npm, "install", "--no-audit", "--no-fund", "--loglevel=error"], cwd=WEB)
     say("Building the web UI ...")
     run([npm, "run", "build", "--silent", "--", "--logLevel", "warn"], cwd=WEB)
+    UI_STAMP.write_text(want)
     say("Web UI built.")
 
 
@@ -181,6 +236,9 @@ def make_shortcut() -> None:
 
 
 def main(argv: list[str]) -> int:
+    if "--ui-hash" in argv:
+        print(ui_hash())
+        return 0
     if "--check" in argv:
         good = check_requirements(report=True)
         say("Ready: run speedcam to install and start." if good else "Install what's missing above, then run this again.")

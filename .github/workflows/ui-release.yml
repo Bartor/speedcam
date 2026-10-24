@@ -1,0 +1,66 @@
+# Builds the web UI on every push to main that changes it, and publishes it as
+# ui-<hash>.zip on the rolling "ui-latest" release. <hash> is `python launch.py --ui-hash`:
+# a hash of the UI sources, so the launcher downloads exactly the build that matches the code a
+# user has, and nobody needs Node.js just to run the app.
+name: Web UI build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "launch.py"
+      - ".github/workflows/ui-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ui-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Package
+        id: pkg
+        run: |
+          HASH=$(python launch.py --ui-hash)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "$HASH" > speedcam/server/static/.ui-hash
+          (cd speedcam/server/static && zip -qr "$GITHUB_WORKSPACE/ui-$HASH.zip" .)
+          ls -l "ui-$HASH.zip"
+
+      - name: Publish to the ui-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HASH: ${{ steps.pkg.outputs.hash }}
+        run: |
+          if ! gh release view ui-latest >/dev/null 2>&1; then
+            gh release create ui-latest --prerelease --target "$GITHUB_SHA" --title "Web UI builds" \
+              --notes "Prebuilt web UI, one ui-<hash>.zip per version of the UI sources (web/). The launcher downloads the one that matches its code, so you don't need these by hand."
+          fi
+          gh release upload ui-latest "ui-$HASH.zip" --clobber
+          # keep the 40 newest builds (older checkouts beyond that build the UI with Node.js)
+          gh release view ui-latest --json assets --jq '.assets | sort_by(.createdAt) | reverse | .[40:] | .[].name' |
+            while read -r name; do gh release delete-asset ui-latest "$name" --yes; done

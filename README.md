@@ -12,7 +12,7 @@ browser UI served from your own machine. No video is uploaded anywhere.
 | OS | Windows 10/11, macOS, Linux | Developed and tested on Windows 11 |
 | Python | 3.11 or newer | The launcher creates its own virtual environment |
 | ffmpeg + ffprobe | on `PATH` | Decoding, proxies and the rendered video |
-| Node.js | 18 or newer | Only to build the web UI on the first run |
+| Node.js | 18 or newer | Optional: only to change the web UI. The launcher downloads the prebuilt UI for your version |
 | GPU | NVIDIA with ~8 GB VRAM recommended | Works without one, but analysis is 10–50× slower |
 | Disk | ~6 GB for the install | PyTorch with CUDA is ~3 GB; YOLO weights download on first use |
 
@@ -21,15 +21,15 @@ browser UI served from your own machine. No video is uploaded anywhere.
 **Windows** (in PowerShell or a terminal):
 
 ```bash
-winget install Python.Python.3.12 Gyan.FFmpeg OpenJS.NodeJS.LTS
+winget install Python.Python.3.12 Gyan.FFmpeg
 ```
 
 Open a new terminal so `PATH` picks them up, download or clone this repository, then
 double-click `speedcam.cmd` (or run it from the folder).
 
-**macOS**: `brew install python@3.12 ffmpeg node`, then `./speedcam.sh` in this folder.
+**macOS**: `brew install python@3.12 ffmpeg`, then `./speedcam.sh` in this folder.
 
-**Linux** (Debian/Ubuntu): `sudo apt install python3 python3-venv ffmpeg nodejs npm`,
+**Linux** (Debian/Ubuntu): `sudo apt install python3 python3-venv ffmpeg`,
 then `./speedcam.sh`. For an NVIDIA GPU, install the driver first; the launcher picks
 CUDA PyTorch when `nvidia-smi` works.
 
@@ -43,10 +43,10 @@ speedcam            # Windows: speedcam.cmd (or double-click it); macOS/Linux: .
 ```
 
 The first run takes a few minutes. It checks the requirements, creates `.venv`,
-installs dependencies (CUDA PyTorch when an NVIDIA GPU is present), builds the web UI,
-then starts the app and opens the browser at http://127.0.0.1:8000. After that it starts
+installs dependencies (CUDA PyTorch when an NVIDIA GPU is present), downloads the web UI
+built for this version (or builds it with Node.js when you've changed it), then starts the app and opens the browser at http://127.0.0.1:8000. After that it starts
 straight away, and redoes a setup step only when needed: `pyproject.toml` changed, or
-the UI sources are newer than the build. No need to activate the venv. A short tutorial
+the UI sources changed. No need to activate the venv. A short tutorial
 opens the first time; the **?** buttons explain each part of the app.
 
 ```bash
@@ -55,6 +55,14 @@ speedcam serve --jobs 3      # any CLI command works through the launcher
 speedcam analyze p.yaml --out out/
 speedcam --setup-only        # install/update without starting
 ```
+
+**Prebuilt web UI.** On every push to `main` that changes `web/`, a GitHub Actions
+workflow (`.github/workflows/ui-release.yml`) builds the UI and attaches it to the rolling
+[`ui-latest`](https://github.com/Bartor/speedcam/releases/tag/ui-latest) release as
+`ui-<hash>.zip`, where the hash covers the UI sources (`speedcam --ui-hash`). The launcher
+downloads the zip matching your checkout, so the UI always fits the code. With no match
+(you changed the UI, or the build is still running) it builds with Node.js. Forks can point
+it elsewhere with `SPEEDCAM_UI_REPO=owner/name`.
 
 **Troubleshooting**
 
